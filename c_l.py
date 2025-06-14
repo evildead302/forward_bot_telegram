@@ -61,7 +61,7 @@ class CombinedLinkForwarder:
         
         # Configurable settings
         self.settings = {
-            'initial_wait': 8,
+            'initial_wait': 10,
             'stabilization_checks': 12,
             'progress_update_interval': 10,
             'completion_delay': 3
