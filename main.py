@@ -4,132 +4,114 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, BotCommand
 from pyrogram.enums import ParseMode, ChatType
 
-# Initialize bot
-bot = Client(
-    "secure_forward_bot",
-    api_id=int(os.environ.get("API_ID", 0)),
-    api_hash=os.environ.get("API_HASH", ""),
-    bot_token=os.environ.get("BOT_TOKEN", ""),
-    session_string=os.environ.get("SESSION_STRING", "")
-)
-
-# Security configuration
-class Security:
+class BotManager:
     def __init__(self):
+        self.bot = Client(
+            "secure_bot",
+            api_id=int(os.environ["API_ID"]),
+            api_hash=os.environ["API_HASH"],
+            bot_token=os.environ["BOT_TOKEN"],
+            session_string=os.environ.get("SESSION_STRING")
+        )
         self.owner_id = None
         self.bot_id = None
-    
+        self.forwarder = None
+        self.combined = None
+
     async def initialize(self):
-        # Get bot account info
-        self.bot_id = (await bot.get_me()).id
-        print(f"🤖 Bot ID: {self.bot_id}")
+        # Start the bot client first
+        await self.bot.start()
+        self.bot_id = (await self.bot.get_me()).id
         
-        # Get owner account info from session
-        if bot.session_string:
-            user_client = Client("owner_account", session_string=bot.session_string)
+        # Initialize owner session if available
+        if self.bot.session_string:
+            user_client = Client("owner_session", session_string=self.bot.session_string)
             await user_client.start()
             self.owner_id = (await user_client.get_me()).id
             await user_client.stop()
-            print(f"👑 Owner ID: {self.owner_id}")
 
-security = Security()
+        # Initialize modules after client is ready
+        import forward
+        import c_l
+        self.forwarder = forward.ForwardBot(self.bot)
+        self.combined = c_l.CombinedLinkForwarder(self.bot)
 
-# Initialize modules
-async def initialize_modules():
-    global combined, forwarder
-    import c_l
-    import forward
-    combined = c_l.CombinedLinkForwarder(bot)
-    forwarder = forward.ForwardBot(bot)
+        print(f"✅ Bot initialized | Owner: {self.owner_id} | Bot: {self.bot_id}")
 
-# Security filter
-async def is_authorized(_, __, message: Message):
-    # Ignore if no user
-    if not message.from_user:
-        return False
-    
-    # Allow only from owner or the bot itself
-    if message.from_user.id not in [security.owner_id, security.bot_id]:
-        return False
-    
-    # For non-private chats, verify bot is member
-    if message.chat.type != ChatType.PRIVATE:
+    async def is_authorized(self, _, __, message: Message):
+        if not message.from_user:
+            return False
+        if message.from_user.id not in [self.owner_id, self.bot_id]:
+            return False
+        if message.chat.type == ChatType.PRIVATE:
+            return True
         try:
-            member = await bot.get_chat_member(message.chat.id, "me")
+            member = await self.bot.get_chat_member(message.chat.id, "me")
             return member.status in ["member", "administrator", "creator"]
         except:
             return False
-    return True
 
-# Command: Start
-@bot.on_message(filters.command("start") & filters.create(is_authorized))
-async def start(client: Client, message: Message):
-    await message.reply_text(
-        "🤖 <b>Secure Forward Bot</b>\n\n"
-        f"👑 Owner: <code>{security.owner_id}</code>\n"
-        f"🤖 Bot ID: <code>{security.bot_id}</code>\n\n"
-        "Commands:\n"
-        "/cl - Combined link forwarder\n"
-        "/forward - Message forwarding\n"
-        "/cancel - Cancel operation",
-        parse_mode=ParseMode.HTML
-    )
+    async def run(self):
+        await self.initialize()
+        
+        # Register commands
+        await self.bot.set_bot_commands([
+            BotCommand("start", "Show bot info"),
+            BotCommand("cl", "Link forwarder"),
+            BotCommand("forward", "Message forwarder"),
+            BotCommand("cancel", "Cancel operations")
+        ])
 
-# Command: Forward
-@bot.on_message(filters.command("forward") & filters.private & filters.create(is_authorized))
-async def forward_cmd(client: Client, message: Message):
-    await forwarder.start_forward_setup(message)
+        # Command handlers
+        @self.bot.on_message(filters.command("start") & filters.create(self.is_authorized))
+        async def start(_, message: Message):
+            await message.reply_text(
+                f"👑 Owner ID: <code>{self.owner_id}</code>\n"
+                f"🤖 Bot ID: <code>{self.bot_id}</code>\n\n"
+                "Commands:\n/cl /forward /cancel",
+                parse_mode=ParseMode.HTML
+            )
 
-# Command: CL
-@bot.on_message(filters.command("cl") & filters.create(is_authorized))
-async def combined_cmd(client: Client, message: Message):
-    await combined.start_combined_process(message)
+        @self.bot.on_message(filters.command("forward") & filters.private & filters.create(self.is_authorized))
+        async def forward_cmd(_, message: Message):
+            await self.forwarder.start_forward_setup(message)
 
-# Command: Cancel
-@bot.on_message(filters.command("cancel") & filters.create(is_authorized))
-async def cancel_cmd(client: Client, message: Message):
-    combined.reset_state()
-    forwarder.reset_state()
-    await message.reply_text("🛑 All operations cancelled")
+        @self.bot.on_message(filters.command("cl") & filters.create(self.is_authorized))
+        async def combined_cmd(_, message: Message):
+            await self.combined.start_combined_process(message)
 
-# Handle messages for active modules
-@bot.on_message(filters.create(is_authorized))
-async def handle_messages(client: Client, message: Message):
-    if forwarder.state.get('active'):
-        await forwarder.handle_setup_message(message)
-    elif combined.state.get('active'):
-        if not combined.state.get('destination_chat'):
-            await combined.handle_destination_input(message)
-        else:
-            await combined.handle_link_collection(message)
+        @self.bot.on_message(filters.command("cancel") & filters.create(self.is_authorized))
+        async def cancel_cmd(_, message: Message):
+            self.forwarder.reset_state()
+            self.combined.reset_state()
+            await message.reply_text("🛑 Operations cancelled")
 
-# Ignore all unauthorized messages
-@bot.on_message(~filters.create(is_authorized))
-async def ignore_unauthorized(_, message: Message):
-    return
+        # Message handler
+        @self.bot.on_message(filters.create(self.is_authorized))
+        async def handle_messages(_, message: Message):
+            if self.forwarder.state.get('active'):
+                await self.forwarder.handle_setup_message(message)
+            elif self.combined.state.get('active'):
+                if not self.combined.state.get('destination_chat'):
+                    await self.combined.handle_destination_input(message)
+                else:
+                    await self.combined.handle_link_collection(message)
 
-# Register bot commands
-async def set_commands():
-    await bot.set_bot_commands([
-        BotCommand("start", "Show bot info"),
-        BotCommand("cl", "Link forwarder"),
-        BotCommand("forward", "Message forwarder"),
-        BotCommand("cancel", "Cancel operations")
-    ])
+        # Ignore unauthorized
+        @self.bot.on_message(~filters.create(self.is_authorized))
+        async def ignore_unauthorized(_, __):
+            return
 
-# Main function
-async def main():
-    await security.initialize()
-    await initialize_modules()
-    await set_commands()
-    
-    print(f"🚀 Bot @{(await bot.get_me()).username} is running")
-    await asyncio.Event().wait()  # Run forever
+        print("🚀 Bot is now running")
+        await asyncio.Event().wait()  # Run forever
 
 if __name__ == "__main__":
+    manager = BotManager()
     try:
-        asyncio.run(main())
+        asyncio.run(manager.run())
     except KeyboardInterrupt:
         print("🛑 Bot stopped by user")
     except Exception as e:
         print(f"💥 Bot crashed: {str(e)}")
+    finally:
+        asyncio.run(manager.bot.stop())
