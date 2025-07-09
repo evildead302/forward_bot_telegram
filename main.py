@@ -7,7 +7,7 @@ from pyrogram.enums import MessageEntityType
 # Check if required modules exist
 try:
     import c_l
-    import forward  # Import our forward module
+    import forward
     print("✅ c_l and forward modules imported successfully")
 except ImportError as e:
     print(f"❌ Missing module: {e}")
@@ -30,7 +30,7 @@ except Exception as e:
 # Initialize modules with verification
 try:
     combined = c_l.CombinedLinkForwarder(bot)
-    forward_bot = forward.ForwardBot(bot)  # Initialize our forward bot
+    forward_bot = forward.ForwardBot(bot)
     print("✅ Modules initialized")
 except Exception as e:
     print(f"❌ Module initialization failed: {e}")
@@ -77,39 +77,16 @@ async def help_cmd(client: Client, message: Message):
         "/cancel - Cancel current operation\n"
     )
 
-def has_quote_entities(filter, client, message: Message):
-    """Check if message has quote-like formatting"""
-    if not message.entities:
-        return False
-    
-    quote_entity_types = (
-        MessageEntityType.BOLD,
-        MessageEntityType.ITALIC,
-        MessageEntityType.BLOCKQUOTE,
-        MessageEntityType.PRE,
-        MessageEntityType.CODE,
-        MessageEntityType.STRIKETHROUGH,
-        MessageEntityType.UNDERLINE,
-        MessageEntityType.SPOILER
-    )
-    
-    if message.text and message.text.startswith('>'):
-        return True
-    
-    return any(entity.type in quote_entity_types for entity in message.entities)
-
 @bot.on_message(
-    filters.text & filters.private |  # Only private messages to bot
+    filters.text & filters.private |
     filters.create(lambda _, __, m: (
-        m.text and m.text.startswith('/') or  # Commands
-        (forward_bot.state.get('active') or combined.state.get('active'))  # Active sessions
-    )
+        m.text and m.text.startswith('/') or
+        (forward_bot.state.get('active') or combined.state.get('active'))
+    ))
 )
 async def handle_messages(client: Client, message: Message):
-    # Check if message is for forward bot
     if forward_bot.state.get('active'):
         await forward_bot.handle_setup_message(message)
-    # Check if message is for combined link forwarder
     elif combined.state.get('active'):
         if not combined.state.get('destination_chat'):
             await combined.handle_destination_input(message)
@@ -120,7 +97,8 @@ def create_temp_dirs():
     """Create required temp directories"""
     dir_names = [
         "temp_cl_data",
-        "temp_forward_data"  # Add directory for forward bot
+        "forward_temp/media_temp",
+        "forward_temp/message_temp"
     ]
     for dir_name in dir_names:
         try:
@@ -142,7 +120,6 @@ threading.Thread(target=lambda: app.run(port=int(os.environ.get('PORT', 5000))))
 if __name__ == "__main__":
     print("🚀 Starting bot...")
     create_temp_dirs()
-    
     try:
         print("🔌 Connecting to Telegram...")
         bot.run()
