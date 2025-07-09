@@ -255,7 +255,7 @@ class ForwardBot:
         try:
             while (not self.state['cancelled'] and 
                   (not self.state['scan_queue'].empty() or 
-                   any(not w.done() for w in self.state['scan_workers'])):
+                   any(not w.done() for w in self.state['scan_workers']):
 
                 current_time = asyncio.get_event_loop().time()
                 if current_time - self.state['last_progress_time'] >= self.PROGRESS_UPDATE_INTERVAL:
