@@ -4,10 +4,11 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import MessageEntityType
 
-# Check if required module exists
+# Check if required modules exist
 try:
     import c_l
-    print("✅ c_l module imported successfully")
+    import forward  # Import our forward module
+    print("✅ c_l and forward modules imported successfully")
 except ImportError as e:
     print(f"❌ Missing module: {e}")
     raise
@@ -26,10 +27,11 @@ except Exception as e:
     print(f"❌ Bot initialization failed: {e}")
     raise
 
-# Initialize module with verification
+# Initialize modules with verification
 try:
     combined = c_l.CombinedLinkForwarder(bot)
-    print("✅ Module initialized")
+    forward_bot = forward.ForwardBot(bot)  # Initialize our forward bot
+    print("✅ Modules initialized")
 except Exception as e:
     print(f"❌ Module initialization failed: {e}")
     raise
@@ -40,6 +42,7 @@ async def start(client: Client, message: Message):
         "🤖 Combined Link Forwarder Bot\n\n"
         "Available commands:\n"
         "/cl - Combined link clicker and forwarder\n"
+        "/forward - Start message forwarding setup\n"
         "/cancel - Cancel current operation\n"
         "/help - Show help"
     )
@@ -48,9 +51,14 @@ async def start(client: Client, message: Message):
 async def combined_cmd(client: Client, message: Message):
     await combined.start_combined_process(message)
 
+@bot.on_message(filters.command("forward"))
+async def forward_cmd(client: Client, message: Message):
+    await forward_bot.start_forward_setup(message)
+
 @bot.on_message(filters.command("cancel"))
 async def cancel_cmd(client: Client, message: Message):
     combined.reset_state()
+    forward_bot.reset_state()
     await message.reply_text("⏹ Operation cancelled and state reset")
 
 @bot.on_message(filters.command("help"))
@@ -60,7 +68,12 @@ async def help_cmd(client: Client, message: Message):
         "/cl - Combined link clicker and forwarder:\n"
         "1. First provide destination chat\n"
         "2. Then provide links to process\n"
-        "3. Bot will click links and forward responses\n"
+        "3. Bot will click links and forward responses\n\n"
+        "/forward - Message forwarding tool:\n"
+        "1. First provide target chat\n"
+        "2. Then provide destination chat\n"
+        "3. Select messages to forward\n"
+        "4. Choose to delete after forwarding\n\n"
         "/cancel - Cancel current operation\n"
     )
 
@@ -86,12 +99,18 @@ def has_quote_entities(filter, client, message: Message):
     return any(entity.type in quote_entity_types for entity in message.entities)
 
 @bot.on_message(
-    filters.text | filters.photo | filters.document |
-    filters.video | filters.audio | filters.voice |
-    filters.reply | filters.create(has_quote_entities)
+    filters.text & filters.private |  # Only private messages to bot
+    filters.create(lambda _, __, m: (
+        m.text and m.text.startswith('/') or  # Commands
+        (forward_bot.state.get('active') or combined.state.get('active'))  # Active sessions
+    )
 )
 async def handle_messages(client: Client, message: Message):
-    if combined.state.get('active'):
+    # Check if message is for forward bot
+    if forward_bot.state.get('active'):
+        await forward_bot.handle_setup_message(message)
+    # Check if message is for combined link forwarder
+    elif combined.state.get('active'):
         if not combined.state.get('destination_chat'):
             await combined.handle_destination_input(message)
         else:
@@ -100,11 +119,12 @@ async def handle_messages(client: Client, message: Message):
 def create_temp_dirs():
     """Create required temp directories"""
     dir_names = [
-        "temp_cl_data"
+        "temp_cl_data",
+        "temp_forward_data"  # Add directory for forward bot
     ]
     for dir_name in dir_names:
         try:
-            tempfile.mkdtemp(prefix=f"{dir_name}_")
+            os.makedirs(dir_name, exist_ok=True)
         except Exception as e:
             print(f"Error creating temp dir {dir_name}: {e}")
 
