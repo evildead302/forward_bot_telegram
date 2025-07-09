@@ -11,7 +11,8 @@ class BotManager:
             api_id=int(os.environ["API_ID"]),
             api_hash=os.environ["API_HASH"],
             bot_token=os.environ["BOT_TOKEN"],
-            session_string=os.environ.get("SESSION_STRING")
+            session_string=os.environ.get("SESSION_STRING"),
+            in_memory=True  # Important for Heroku
         )
         self.owner_id = None
         self.bot_id = None
@@ -19,18 +20,23 @@ class BotManager:
         self.combined = None
 
     async def initialize(self):
-        # Start the bot client first
+        # Create a new event loop for the bot
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
         await self.bot.start()
         self.bot_id = (await self.bot.get_me()).id
         
-        # Initialize owner session if available
         if self.bot.session_string:
-            user_client = Client("owner_session", session_string=self.bot.session_string)
+            user_client = Client(
+                "owner_session",
+                session_string=self.bot.session_string,
+                in_memory=True
+            )
             await user_client.start()
             self.owner_id = (await user_client.get_me()).id
             await user_client.stop()
 
-        # Initialize modules after client is ready
         import forward
         import c_l
         self.forwarder = forward.ForwardBot(self.bot)
@@ -51,67 +57,74 @@ class BotManager:
         except:
             return False
 
-    async def run(self):
-        await self.initialize()
-        
-        # Register commands
-        await self.bot.set_bot_commands([
-            BotCommand("start", "Show bot info"),
-            BotCommand("cl", "Link forwarder"),
-            BotCommand("forward", "Message forwarder"),
-            BotCommand("cancel", "Cancel operations")
-        ])
+    async def run_bot(self):
+        try:
+            await self.initialize()
+            
+            await self.bot.set_bot_commands([
+                BotCommand("start", "Show bot info"),
+                BotCommand("cl", "Link forwarder"),
+                BotCommand("forward", "Message forwarder"),
+                BotCommand("cancel", "Cancel operations")
+            ])
 
-        # Command handlers
-        @self.bot.on_message(filters.command("start") & filters.create(self.is_authorized))
-        async def start(_, message: Message):
-            await message.reply_text(
-                f"👑 Owner ID: <code>{self.owner_id}</code>\n"
-                f"🤖 Bot ID: <code>{self.bot_id}</code>\n\n"
-                "Commands:\n/cl /forward /cancel",
-                parse_mode=ParseMode.HTML
-            )
+            @self.bot.on_message(filters.command("start") & filters.create(self.is_authorized))
+            async def start(_, message: Message):
+                await message.reply_text(
+                    f"👑 Owner ID: <code>{self.owner_id}</code>\n"
+                    f"🤖 Bot ID: <code>{self.bot_id}</code>\n\n"
+                    "Commands:\n/cl /forward /cancel",
+                    parse_mode=ParseMode.HTML
+                )
 
-        @self.bot.on_message(filters.command("forward") & filters.private & filters.create(self.is_authorized))
-        async def forward_cmd(_, message: Message):
-            await self.forwarder.start_forward_setup(message)
+            @self.bot.on_message(filters.command("forward") & filters.private & filters.create(self.is_authorized))
+            async def forward_cmd(_, message: Message):
+                await self.forwarder.start_forward_setup(message)
 
-        @self.bot.on_message(filters.command("cl") & filters.create(self.is_authorized))
-        async def combined_cmd(_, message: Message):
-            await self.combined.start_combined_process(message)
+            @self.bot.on_message(filters.command("cl") & filters.create(self.is_authorized))
+            async def combined_cmd(_, message: Message):
+                await self.combined.start_combined_process(message)
 
-        @self.bot.on_message(filters.command("cancel") & filters.create(self.is_authorized))
-        async def cancel_cmd(_, message: Message):
-            self.forwarder.reset_state()
-            self.combined.reset_state()
-            await message.reply_text("🛑 Operations cancelled")
+            @self.bot.on_message(filters.command("cancel") & filters.create(self.is_authorized))
+            async def cancel_cmd(_, message: Message):
+                self.forwarder.reset_state()
+                self.combined.reset_state()
+                await message.reply_text("🛑 Operations cancelled")
 
-        # Message handler
-        @self.bot.on_message(filters.create(self.is_authorized))
-        async def handle_messages(_, message: Message):
-            if self.forwarder.state.get('active'):
-                await self.forwarder.handle_setup_message(message)
-            elif self.combined.state.get('active'):
-                if not self.combined.state.get('destination_chat'):
-                    await self.combined.handle_destination_input(message)
-                else:
-                    await self.combined.handle_link_collection(message)
+            @self.bot.on_message(filters.create(self.is_authorized))
+            async def handle_messages(_, message: Message):
+                if self.forwarder.state.get('active'):
+                    await self.forwarder.handle_setup_message(message)
+                elif self.combined.state.get('active'):
+                    if not self.combined.state.get('destination_chat'):
+                        await self.combined.handle_destination_input(message)
+                    else:
+                        await self.combined.handle_link_collection(message)
 
-        # Ignore unauthorized
-        @self.bot.on_message(~filters.create(self.is_authorized))
-        async def ignore_unauthorized(_, __):
-            return
+            @self.bot.on_message(~filters.create(self.is_authorized))
+            async def ignore_unauthorized(_, __):
+                return
 
-        print("🚀 Bot is now running")
-        await asyncio.Event().wait()  # Run forever
+            print("🚀 Bot is now running")
+            await asyncio.Event().wait()
+
+        except Exception as e:
+            print(f"💥 Error: {str(e)}")
+        finally:
+            if self.bot.is_initialized:
+                await self.bot.stop()
+            print("🛑 Bot stopped")
+
+def main():
+    manager = BotManager()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(manager.run_bot())
+    except KeyboardInterrupt:
+        print("\n🛑 Received exit signal")
+    finally:
+        loop.close()
 
 if __name__ == "__main__":
-    manager = BotManager()
-    try:
-        asyncio.run(manager.run())
-    except KeyboardInterrupt:
-        print("🛑 Bot stopped by user")
-    except Exception as e:
-        print(f"💥 Bot crashed: {str(e)}")
-    finally:
-        asyncio.run(manager.bot.stop())
+    main()
