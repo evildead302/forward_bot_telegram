@@ -1,6 +1,6 @@
 pyrogram==2.0.106  # Pinned stable version
 tgcrypto==1.2.4
 python-dotenv==1.0.0
-ffmpeg-python==0.2.0
+ffmpeg-python
 flask==2.3.2
 gunicorn==21.2.0
