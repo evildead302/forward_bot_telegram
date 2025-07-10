@@ -9,10 +9,8 @@ class SecureBot:
     def __init__(self):
         self.bot = None
         self.bot_id = None
-        self.allowed_user_id = None  # To store the authorized user ID
         self.combined = None
         self.forwarder = None
-        self.waiting_for_user = False  # Flag to track if we're waiting for initial user
 
     async def initialize(self):
         """Initialize the bot and all components"""
@@ -28,8 +26,7 @@ class SecureBot:
         me = await self.bot.get_me()
         self.bot_id = me.id
         print(f"🤖 Bot @{me.username} (ID: {self.bot_id}) initialized")
-        print("🕒 Waiting for initial message from user in bot's private chat...")
-        self.waiting_for_user = True
+        print("🕒 Waiting for messages in bot's self-chat...")
 
         # Initialize modules
         import c_l
@@ -41,38 +38,15 @@ class SecureBot:
         # Register handlers
         self.register_handlers()
 
-    def is_authorized_chat(self, message: Message):
-        """Check if message is in authorized chat (either bot's self-chat or from authorized user)"""
-        if self.waiting_for_user:
-            # During initial setup, only accept messages from bot's self-chat
-            return message.chat.id == self.bot_id
-        
-        if not self.allowed_user_id:
-            return False
-            
-        # After setup, accept messages from either:
-        # 1. The authorized user's private chat
-        # 2. The bot's self-chat
-        return (message.chat.id == self.allowed_user_id or 
-                message.chat.id == self.bot_id)
+    def is_bot_self_chat(self, message: Message):
+        """Check if message is in bot's self-chat"""
+        return message.chat.id == self.bot_id
 
     def register_handlers(self):
         """Register all message handlers"""
-        @self.bot.on_message(filters.create(lambda _, __, m: self.is_authorized_chat(m)))
-        async def handle_all_messages(client: Client, message: Message):
-            if self.waiting_for_user:
-                # First message after startup - store user ID
-                if message.chat.id == self.bot_id and message.from_user:
-                    self.allowed_user_id = message.from_user.id
-                    self.waiting_for_user = False
-                    await message.reply_text(
-                        f"✅ Authorized user set: {self.allowed_user_id}\n"
-                        "Bot is now ready to receive your commands."
-                    )
-                    print(f"🔑 Authorized user set: {self.allowed_user_id}")
-                return
-            
-            # Process commands normally after setup
+        @self.bot.on_message(filters.create(lambda _, __, m: self.is_bot_self_chat(m)))
+        async def handle_self_chat_messages(client: Client, message: Message):
+            # Process commands normally
             if message.text and message.text.startswith("/"):
                 await self.process_command(message)
             elif self.combined.state.get('active'):
@@ -80,9 +54,9 @@ class SecureBot:
             elif self.forwarder.state.get('active'):
                 await self.forwarder.handle_setup_message(message)
 
-        @self.bot.on_message(~filters.create(lambda _, __, m: self.is_authorized_chat(m)))
+        @self.bot.on_message(~filters.create(lambda _, __, m: self.is_bot_self_chat(m)))
         async def ignore_other_messages(_, message: Message):
-            print(f"🚫 Ignored message from {message.from_user.id if message.from_user else 'unknown'} in chat {message.chat.id}")
+            print(f"🚫 Ignored message from chat {message.chat.id} (type: {message.chat.type})")
 
     async def process_command(self, message: Message):
         """Process bot commands"""
@@ -90,7 +64,7 @@ class SecureBot:
         
         if command == "/start":
             await message.reply_text(
-                "🤖 Secure Bot\n\n"
+                "🤖 Secure Bot (Self-Chat Mode)\n\n"
                 "Available commands:\n"
                 "/cl - Process links\n"
                 "/forward - Forward messages\n"
@@ -117,7 +91,7 @@ class SecureBot:
         """Main bot running loop"""
         try:
             await self.initialize()
-            print("🚀 Bot is now running")
+            print(f"🚀 Bot is now running (only responds in self-chat ID: {self.bot_id})")
             await asyncio.Event().wait()  # Run forever
         except Exception as e:
             print(f"💥 Error: {e}")
