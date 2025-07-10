@@ -1,6 +1,5 @@
 import os
 import asyncio
-import time
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import ChatType
@@ -11,17 +10,15 @@ class SecureBot:
         self.bot = None
         self.bot_id = None
         self.bot_username = None
-        self.allowed_users = set()
+        self.allowed_users = set()  # Stores verified user IDs
         self.combined = None
         self.forwarder = None
-        self.username_waiting = True
         self.max_retries = 3
         self.retry_delay = 5  # seconds
 
     async def initialize(self):
         """Initialize the bot with retry mechanism"""
         retry_count = 0
-        last_error = None
         
         while retry_count < self.max_retries:
             try:
@@ -46,60 +43,48 @@ class SecureBot:
                 self.forwarder = ForwardBot(self.bot)
                 print("✅ Modules loaded")
                 
-                # Register handlers
                 self.register_handlers()
                 return True
                 
             except FloodWait as e:
-                last_error = e
-                wait_time = e.value + 5  # Add buffer time
-                print(f"⚠️ Flood wait detected. Waiting for {wait_time} seconds...")
-                await asyncio.sleep(wait_time)
+                print(f"⚠️ Flood wait detected. Waiting for {e.value} seconds...")
+                await asyncio.sleep(e.value)
                 retry_count += 1
-                
             except Exception as e:
-                last_error = e
                 print(f"⚠️ Initialization error (attempt {retry_count + 1}/{self.max_retries}): {e}")
                 await asyncio.sleep(self.retry_delay)
                 retry_count += 1
                 
         print(f"💥 Failed to initialize after {self.max_retries} attempts")
-        if last_error:
-            raise last_error
         return False
 
-    def is_allowed_chat(self, message: Message):
-        """Check if message is from an allowed user"""
-        if self.username_waiting:
-            return (message.text and 
-                    f"@{self.bot_username}" in message.text.lower() and
-                    message.chat.type == ChatType.PRIVATE)
-        
+    def is_verified_user(self, message: Message):
+        """Check if message is from verified user"""
         return (message.chat.type == ChatType.PRIVATE and 
                 message.from_user and 
                 message.from_user.id in self.allowed_users)
 
     def register_handlers(self):
         """Register all message handlers"""
-        @self.bot.on_message(filters.private & ~filters.create(lambda _, __, m: self.is_allowed_chat(m)))
-        async def initial_verification(client: Client, message: Message):
-            if self.username_waiting and message.text and f"@{self.bot_username}" in message.text.lower():
-                self.allowed_users.add(message.from_user.id)
-                self.username_waiting = False
-                await message.reply_text(
-                    f"✅ Verification successful! You can now use the bot.\n"
-                    f"Your User ID: {message.from_user.id}\n\n"
-                    f"Available commands:\n"
-                    "/cl - Process links\n"
-                    "/forward - Forward messages\n"
-                    "/cancel - Cancel operation\n"
-                    "/help - Show help"
-                )
-                return
-            await message.reply_text(f"Please start by sending a message containing @{self.bot_username}")
+        # Verification handler - accepts any private message
+        @self.bot.on_message(filters.private & ~filters.create(lambda _, __, m: self.is_verified_user(m)))
+        async def verify_user(client: Client, message: Message):
+            self.allowed_users.add(message.from_user.id)
+            await message.reply_text(
+                f"✅ Verification successful!\n"
+                f"Your User ID: {message.from_user.id}\n\n"
+                "Available commands:\n"
+                "/cl - Process links\n"
+                "/forward - Forward messages\n"
+                "/cancel - Cancel operation\n"
+                "/help - Show help"
+            )
 
-        @self.bot.on_message(filters.command("start") & filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        @self.bot.on_message(filters.command("start") & filters.private)
         async def start(client: Client, message: Message):
+            if message.from_user.id not in self.allowed_users:
+                self.allowed_users.add(message.from_user.id)
+                
             await message.reply_text(
                 "🤖 Combined Link Forwarder Bot\n\n"
                 "Available commands:\n"
@@ -109,21 +94,21 @@ class SecureBot:
                 "/help - Show help"
             )
 
-        @self.bot.on_message(filters.command("forward") & filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        @self.bot.on_message(filters.command("forward") & filters.create(lambda _, __, m: self.is_verified_user(m)))
         async def forward_cmd(client: Client, message: Message):
             await self.forwarder.start_forward_setup(message)
 
-        @self.bot.on_message(filters.command("cl") & filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        @self.bot.on_message(filters.command("cl") & filters.create(lambda _, __, m: self.is_verified_user(m)))
         async def combined_cmd(client: Client, message: Message):
             await self.combined.start_combined_process(message)
 
-        @self.bot.on_message(filters.command("cancel") & filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        @self.bot.on_message(filters.command("cancel") & filters.create(lambda _, __, m: self.is_verified_user(m)))
         async def cancel_cmd(client: Client, message: Message):
             self.combined.reset_state()
             self.forwarder.reset_state()
             await message.reply_text("⏹ Operation cancelled")
 
-        @self.bot.on_message(filters.command("help") & filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        @self.bot.on_message(filters.command("help") & filters.create(lambda _, __, m: self.is_verified_user(m)))
         async def help_cmd(client: Client, message: Message):
             await message.reply_text(
                 "🆘 Help Information\n\n"
@@ -135,30 +120,24 @@ class SecureBot:
         @self.bot.on_message(
             (filters.text | filters.photo | filters.document |
              filters.video | filters.audio | filters.voice |
-             filters.reply) & filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+             filters.reply) & filters.create(lambda _, __, m: self.is_verified_user(m)))
         async def handle_messages(client: Client, message: Message):
             if self.combined.state.get('active'):
                 await self.combined.handle_message_flow(message)
             elif self.forwarder.state.get('active'):
                 await self.forwarder.handle_setup_message(message)
 
-        @self.bot.on_message(~filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        @self.bot.on_message(~filters.create(lambda _, __, m: self.is_verified_user(m)))
         async def ignore_other_messages(_, message: Message):
-            user_info = f"user {message.from_user.id}" if message.from_user else "unknown"
-            chat_info = f"chat {message.chat.id} (type: {message.chat.type})"
-            print(f"🚫 Ignored message from {user_info} in {chat_info}")
+            if message.chat.type != ChatType.PRIVATE:
+                print(f"🚫 Ignored non-private message from chat {message.chat.id}")
 
     async def run(self):
         """Main bot running loop"""
         try:
-            success = await self.initialize()
-            if not success:
-                print("❌ Bot initialization failed. Exiting...")
-                return
-                
-            print(f"🚀 Bot is now running. Users must send @{self.bot_username} to verify")
-            await asyncio.Event().wait()  # Run forever
-            
+            if await self.initialize():
+                print("🚀 Bot is now running")
+                await asyncio.Event().wait()  # Run forever
         except Exception as e:
             print(f"💥 Error: {e}")
         finally:
@@ -167,11 +146,8 @@ class SecureBot:
     async def shutdown(self):
         """Graceful shutdown procedure"""
         if self.bot and self.bot.is_initialized:
-            try:
-                await self.bot.stop()
-                print("✅ Bot stopped gracefully")
-            except Exception as e:
-                print(f"⚠️ Error during shutdown: {e}")
+            await self.bot.stop()
+            print("✅ Bot stopped gracefully")
 
 def create_temp_dirs():
     """Create required temporary directories"""
