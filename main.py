@@ -1,9 +1,10 @@
 import os
 import asyncio
+import tempfile
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import ChatType
-from pyrogram.errors import FloodWait, SessionExpired
+from pyrogram.errors import FloodWait
 
 class SecureBot:
     def __init__(self):
@@ -13,95 +14,64 @@ class SecureBot:
         self.allowed_users = set()
         self.combined = None
         self.forwarder = None
-        self.session_file = "bot_session"
-        self.max_retries = 3
-        self.retry_delay = 10
+        self.session_name = "secure_bot_session"
 
     async def initialize(self):
-        """Initialize the bot with proper session management"""
-        retry_count = 0
-        
-        while retry_count < self.max_retries:
-            try:
-                self.bot = Client(
-                    name=self.session_file,
-                    api_id=int(os.environ.get("API_ID", 0)),
-                    api_hash=os.environ.get("API_HASH", ""),
-                    bot_token=os.environ.get("BOT_TOKEN", ""),
-                    workdir=".",
-                )
-                
-                await self.bot.start()
-                me = await self.bot.get_me()
-                self.bot_id = me.id
-                self.bot_username = me.username
-                print(f"🤖 Bot @{self.bot_username} (ID: {self.bot_id}) initialized")
-                
-                # Initialize modules
-                import c_l
-                from forward import ForwardBot
-                self.combined = c_l.CombinedLinkForwarder(self.bot)
-                self.forwarder = ForwardBot(self.bot)
-                print("✅ Modules loaded")
-                
-                self.register_handlers()
-                return True
-                
-            except SessionExpired:
-                print("⚠️ Session expired. Creating new session...")
-                if os.path.exists(f"{self.session_file}.session"):
-                    os.remove(f"{self.session_file}.session")
-                retry_count += 1
-                
-            except FloodWait as e:
-                print(f"⚠️ Flood wait detected. Waiting for {e.value} seconds...")
-                await asyncio.sleep(e.value)
-                retry_count += 1
-                
-            except Exception as e:
-                print(f"⚠️ Initialization error (attempt {retry_count + 1}/{self.max_retries}): {e}")
-                await asyncio.sleep(self.retry_delay)
-                retry_count += 1
-                
-        print(f"💥 Failed to initialize after {self.max_retries} attempts")
-        return False
+        """Initialize the bot with proper session handling"""
+        try:
+            self.bot = Client(
+                name=self.session_name,
+                api_id=int(os.environ.get("API_ID", 0)),
+                api_hash=os.environ.get("API_HASH", ""),
+                bot_token=os.environ.get("BOT_TOKEN", ""),
+                workdir="."  # Store session in current directory
+            )
+            
+            # Connect and authenticate
+            await self.bot.start()
+            
+            # Get bot info
+            me = await self.bot.get_me()
+            self.bot_id = me.id
+            self.bot_username = me.username
+            print(f"🤖 Bot @{self.bot_username} (ID: {self.bot_id}) initialized and logged in")
+            
+            # Initialize modules
+            import c_l
+            from forward import ForwardBot
+            self.combined = c_l.CombinedLinkForwarder(self.bot)
+            self.forwarder = ForwardBot(self.bot)
+            print("✅ Modules loaded")
+            
+            self.register_handlers()
+            return True
+            
+        except FloodWait as e:
+            print(f"⏳ Flood wait: Need to wait {e.value} seconds")
+            await asyncio.sleep(e.value)
+            return await self.initialize()
+        except Exception as e:
+            print(f"💥 Login failed: {str(e)}")
+            return False
 
-    def is_verified_user(self, message: Message):
-        """Check if message is from verified user"""
-        return (message.chat.type == ChatType.PRIVATE and 
-                message.from_user and 
-                message.from_user.id in self.allowed_users)
+    def is_allowed_chat(self, message: Message):
+        """Check if message is from allowed user"""
+        return message.chat.type == ChatType.PRIVATE
 
     def register_handlers(self):
         """Register all message handlers"""
-        @self.bot.on_message(filters.private & ~filters.create(lambda _, __, m: self.is_verified_user(m)))
-        async def verify_user(client: Client, message: Message):
-            self.allowed_users.add(message.from_user.id)
-            await message.reply_text(
-                f"✅ Verification successful!\n"
-                f"Your User ID: {message.from_user.id}\n\n"
-                "Available commands:\n"
-                "/cl - Process links\n"
-                "/forward - Forward messages\n"
-                "/cancel - Cancel operation\n"
-                "/help - Show help"
-            )
-
         @self.bot.on_message(filters.command("start") & filters.private)
         async def start(client: Client, message: Message):
-            if message.from_user.id not in self.allowed_users:
-                self.allowed_users.add(message.from_user.id)
-                
+            self.allowed_users.add(message.from_user.id)
             await message.reply_text(
-                "🤖 Combined Link Forwarder Bot\n\n"
+                "🤖 Bot Ready!\n\n"
                 "Available commands:\n"
                 "/cl - Process links\n"
                 "/forward - Forward messages\n"
-                "/cancel - Cancel operation\n"
-                "/help - Show help"
+                "/cancel - Cancel operation"
             )
 
-        # [Other handlers remain the same as previous version...]
+        # [Add your other handlers here...]
 
     async def run(self):
         """Main bot running loop"""
@@ -109,25 +79,30 @@ class SecureBot:
             if await self.initialize():
                 print("🚀 Bot is now running")
                 await asyncio.Event().wait()  # Run forever
+            else:
+                print("❌ Bot failed to start")
         except Exception as e:
             print(f"💥 Error: {e}")
         finally:
             await self.shutdown()
 
     async def shutdown(self):
-        """Graceful shutdown with session preservation"""
-        if self.bot and await self.bot.is_initialized:
+        """Graceful shutdown"""
+        if self.bot:
             try:
                 await self.bot.stop()
-                print("✅ Bot stopped gracefully. Session saved.")
-            except Exception as e:
-                print(f"⚠️ Error during shutdown: {e}")
+                print("✅ Bot stopped gracefully")
+            except:
+                pass
 
-if __name__ == "__main__":
-    # Create required directories
+def create_temp_dirs():
+    """Create required temporary directories"""
     os.makedirs("temp_cl_data", exist_ok=True)
     os.makedirs("forward_temp", exist_ok=True)
-    
+    print("📁 Created temp directories")
+
+if __name__ == "__main__":
+    create_temp_dirs()
     bot = SecureBot()
     
     loop = asyncio.new_event_loop()
