@@ -4,69 +4,97 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, BotCommand
 from pyrogram.enums import ParseMode
 
-class SecureBot:
+class WorkingBot:
     def __init__(self):
+        # Initialize bot with environment variables
         self.bot = Client(
-            "bot_account",
+            "main_bot",
             api_id=int(os.environ["API_ID"]),
             api_hash=os.environ["API_HASH"],
             bot_token=os.environ["BOT_TOKEN"],
             in_memory=True
         )
+        
+        # Initialize modules
+        self.forwarder = None
+        self.combined = None
         self.bot_id = None
 
-    async def initialize(self):
-        await self.bot.start()
-        self.bot_id = (await self.bot.get_me()).id
-        print(f"🤖 Bot ready | ID: {self.bot_id}")
-
-    async def is_authorized(self, _, message: Message):
-        """Allow messages sent to the bot in any private context"""
-        return message.chat.type == "private"  # Changed from ChatType.BOT
+    async def initialize_modules(self):
+        """Initialize all required modules"""
+        from forward import ForwardBot  # Your forwarding module
+        import c_l  # Your combined links module
+        
+        self.forwarder = ForwardBot(self.bot)
+        self.combined = c_l.CombinedLinkForwarder(self.bot)
+        print("✅ Modules initialized")
 
     async def run(self):
-        try:
-            await self.initialize()
-            
-            # Debug command to check chat type
-            @self.bot.on_message(filters.command("chatid"))
-            async def chatid(_, message: Message):
-                await message.reply(f"Chat ID: {message.chat.id}\nType: {message.chat.type}")
+        await self.bot.start()
+        me = await self.bot.get_me()
+        self.bot_id = me.id
+        print(f"🤖 Bot @{me.username} ready (ID: {self.bot_id})")
 
-            auth_filter = filters.create(self.is_authorized)
+        # Initialize modules
+        await self.initialize_modules()
 
-            @self.bot.on_message(filters.command("start") & auth_filter)
-            async def start(_, message: Message):
-                await message.reply_text(
-                    "🤖 <b>Bot is working!</b>\n\n"
-                    "Send /cl to start link processing",
-                    parse_mode=ParseMode.HTML
-                )
+        # Set bot commands
+        await self.bot.set_bot_commands([
+            BotCommand("start", "Show bot info"),
+            BotCommand("forward", "Message forwarding"),
+            BotCommand("cl", "Combined link processor"),
+            BotCommand("cancel", "Cancel current operation")
+        ])
 
-            @self.bot.on_message(filters.command("cl") & auth_filter)
-            async def combined_cmd(_, message: Message):
-                await message.reply("CL command received!")  # Test response
-                # await self.combined.start_combined_process(message)
+        # Command handlers
+        @self.bot.on_message(filters.command("start"))
+        async def start(_, message: Message):
+            await message.reply_text(
+                "🔧 <b>Bot is fully operational!</b>\n\n"
+                "<b>Available commands:</b>\n"
+                "/forward - Message forwarding\n"
+                "/cl - Combined link processor\n"
+                "/cancel - Cancel operations",
+                parse_mode=ParseMode.HTML
+            )
 
-            @self.bot.on_message(~auth_filter)
-            async def log_unauthorized(_, message: Message):
-                print(f"DEBUG - Chat Type: {message.chat.type}")
+        @self.bot.on_message(filters.command("forward"))
+        async def forward_cmd(_, message: Message):
+            await self.forwarder.start_forward_setup(message)
 
-            print("🚀 Bot is now running")
-            await asyncio.Event().wait()
+        @self.bot.on_message(filters.command("cl"))
+        async def combined_cmd(_, message: Message):
+            await self.combined.start_combined_process(message)
 
-        except Exception as e:
-            print(f"💥 Error: {e}")
-        finally:
-            await self.bot.stop()
+        @self.bot.on_message(filters.command("cancel"))
+        async def cancel_cmd(_, message: Message):
+            self.forwarder.reset_state()
+            self.combined.reset_state()
+            await message.reply_text("🛑 All operations cancelled")
+
+        # Debug handler
+        @self.bot.on_message()
+        async def debug(_, message: Message):
+            print(f"Received message from {message.from_user.id}: {message.text}")
+
+        print("⚡ Bot is now fully operational")
+        await asyncio.Event().wait()  # Run forever
+
+    async def shutdown(self):
+        await self.bot.stop()
+        print("🛑 Bot stopped gracefully")
 
 if __name__ == "__main__":
-    bot = SecureBot()
+    bot = WorkingBot()
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    
     try:
         loop.run_until_complete(bot.run())
     except KeyboardInterrupt:
-        print("\n🛑 Bot stopped")
+        print("\n🛑 Received shutdown signal")
+    except Exception as e:
+        print(f"💥 Error: {e}")
     finally:
+        loop.run_until_complete(bot.shutdown())
         loop.close()
