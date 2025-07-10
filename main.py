@@ -13,10 +13,10 @@ class SecureBot:
         self.forwarder = None
 
     async def initialize(self):
-        """Initialize the bot with session support"""
+        """Initialize the bot with proper error handling"""
         try:
             self.bot = Client(
-                "secure_bot_session",
+                "secure_bot",
                 api_id=int(os.environ.get("API_ID", 0)),
                 api_hash=os.environ.get("API_HASH", ""),
                 bot_token=os.environ.get("BOT_TOKEN", ""),
@@ -61,8 +61,8 @@ class SecureBot:
         return False
 
     def register_handlers(self):
-        """Register all message handlers"""
-        @self.bot.on_message(filters.command("start") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        """Register all message handlers with proper filtering"""
+        @self.bot.on_message(filters.command("start") & filters.private)
         async def start(client: Client, message: Message):
             await message.reply_text(
                 "🤖 Secure Bot\n\n"
@@ -73,15 +73,15 @@ class SecureBot:
                 "/help - Show help"
             )
 
-        @self.bot.on_message(filters.command("forward") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        @self.bot.on_message(filters.command("forward") & filters.private)
         async def forward_cmd(client: Client, message: Message):
             await self.forwarder.start_forward_setup(message)
 
-        @self.bot.on_message(filters.command("cl") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        @self.bot.on_message(filters.command("cl") & filters.private)
         async def combined_cmd(client: Client, message: Message):
             await self.combined.start_combined_process(message)
 
-        @self.bot.on_message(filters.command("cancel") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        @self.bot.on_message(filters.command("cancel") & filters.private)
         async def cancel_cmd(client: Client, message: Message):
             if self.forwarder:
                 self.forwarder.reset_state()
@@ -89,7 +89,7 @@ class SecureBot:
                 self.combined.reset_state()
             await message.reply_text("⏹ Operation cancelled")
 
-        @self.bot.on_message(filters.command("help") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        @self.bot.on_message(filters.command("help") & filters.private)
         async def help_cmd(client: Client, message: Message):
             await message.reply_text(
                 "🆘 Help Information\n\n"
@@ -100,6 +100,7 @@ class SecureBot:
 
         @self.bot.on_message(filters.create(lambda _, __, m: self.should_process(m)))
         async def handle_messages(client: Client, message: Message):
+            # Skip processing bot's own messages
             if message.from_user and message.from_user.id == self.bot_id:
                 return
                 
@@ -110,15 +111,16 @@ class SecureBot:
 
         @self.bot.on_message(~filters.create(lambda _, __, m: self.should_process(m)))
         async def ignore_other_messages(_, message: Message):
-            if message.chat.type == ChatType.PRIVATE and not self.is_bot_chat(message):
-                await message.reply(f"❌ Please message @{self.bot_username} directly.")
+            # Only respond to unauthorized private messages
+            if message.chat.type == ChatType.PRIVATE:
+                await message.reply(f"❌ Please use commands in private chat with @{self.bot_username}")
 
     async def run(self):
         """Main bot running loop"""
         try:
             await self.initialize()
             print("🚀 Bot is now running (Ctrl+C to stop)")
-            await asyncio.Event().wait()
+            await asyncio.Event().wait()  # Run forever
         except Exception as e:
             print(f"💥 Error: {e}")
         finally:
