@@ -4,92 +4,99 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import ChatType
 
-async def run_bot():
-    bot = Client(
-        "main_bot",
-        api_id=int(os.environ.get("API_ID", 0)),
-        api_hash=os.environ.get("API_HASH", ""),
-        bot_token=os.environ.get("BOT_TOKEN", ""),
-        session_string=os.environ.get("SESSION_STRING", "")
-    )
+class SecureBot:
+    def __init__(self):
+        self.bot = None
+        self.bot_id = None
+        self.bot_username = None
+        self.combined = None
+        self.forwarder = None
 
-    try:
-        await bot.start()
-        me = await bot.get_me()
-        bot_username = me.username
-        bot_id = me.id
-        print(f"✅ Logged in as @{bot_username} (ID: {bot_id})")
+    async def initialize(self):
+        """Initialize with proper session handling"""
+        self.bot = Client(
+            "main_bot",
+            api_id=int(os.environ.get("API_ID", 0)),
+            api_hash=os.environ.get("API_HASH", ""),
+            bot_token=os.environ.get("BOT_TOKEN", ""),
+            session_string=os.environ.get("SESSION_STRING", "")
+        )
 
-        # Initialize modules
+        await self.bot.start()
+        me = await self.bot.get_me()
+        self.bot_id = me.id
+        self.bot_username = me.username
+        print(f"✅ Logged in as @{self.bot_username} (ID: {self.bot_id})")
+
+        # Initialize only required modules
         import c_l
         from forward import ForwardBot
-        combined = c_l.CombinedLinkForwarder(bot)
-        forward_bot = ForwardBot(bot)
+        self.combined = c_l.CombinedLinkForwarder(self.bot)
+        self.forwarder = ForwardBot(self.bot)
 
-        def is_bot_private_chat(_, __, message: Message):
-            """Strict filter for bot's own private chat"""
-            is_private = message.chat.type == ChatType.PRIVATE
-            is_bot_chat = message.chat.id == bot_id
-            return is_private and is_bot_chat
+    def is_bot_private_chat(self, message: Message):
+        """Strict filter for bot's own private chat"""
+        return (message.chat.type == ChatType.PRIVATE and 
+                message.chat.id == self.bot_id)
 
-        @bot.on_message(filters.command("start") & filters.create(is_bot_private_chat))
-        async def start(client: Client, message: Message):
-            print(f"📩 Received /start in bot's chat (ID: {message.chat.id})")
+    async def run(self):
+        try:
+            await self.initialize()
+            print(f"🚀 Bot @{self.bot_username} is now running")
+
+            @self.bot.on_message(filters.create(
+                lambda _, __, m: self.is_bot_private_chat(m)
+            ))
+            async def handle_commands(client: Client, message: Message):
+                print(f"📩 Received in bot's chat (ID: {message.chat.id})")
+                if message.text.startswith('/'):
+                    await self.process_commands(message)
+                else:
+                    await self.process_messages(message)
+
+            @self.bot.on_message(~filters.create(
+                lambda _, __, m: self.is_bot_private_chat(m)
+            ))
+            async def ignore_others(client: Client, message: Message):
+                chat_type = "private chat" if message.chat.type == ChatType.PRIVATE else "group/channel"
+                print(f"🚫 Ignored message from {chat_type} (ID: {message.chat.id})")
+
+            await asyncio.Event().wait()
+
+        except Exception as e:
+            print(f"💥 Error: {e}")
+        finally:
+            if self.bot and await self.bot.is_initialized:
+                await self.bot.stop()
+                print("✅ Bot stopped")
+
+    async def process_commands(self, message: Message):
+        """Handle commands in bot's private chat"""
+        if message.text.startswith('/start'):
             await message.reply_text(
                 "🤖 Bot Menu\n\n"
                 "/forward - Forward messages\n"
                 "/cl - Combined operations\n"
                 "/cancel - Cancel operation"
             )
-
-        @bot.on_message(filters.command("forward") & filters.create(is_bot_private_chat))
-        async def forward_cmd(client: Client, message: Message):
-            print(f"📩 Received /forward in bot's chat (ID: {message.chat.id})")
-            await forward_bot.start_forward_setup(message)
-
-        @bot.on_message(filters.command("cl") & filters.create(is_bot_private_chat))
-        async def combined_cmd(client: Client, message: Message):
-            print(f"📩 Received /cl in bot's chat (ID: {message.chat.id})")
-            await combined.start_combined_process(message)
-
-        @bot.on_message(filters.command("cancel") & filters.create(is_bot_private_chat))
-        async def cancel_cmd(client: Client, message: Message):
-            print(f"📩 Received /cancel in bot's chat (ID: {message.chat.id})")
-            forward_bot.reset_state()
-            combined.reset_state()
+        elif message.text.startswith('/forward'):
+            await self.forwarder.start_forward_setup(message)
+        elif message.text.startswith('/cl'):
+            await self.combined.start_combined_process(message)
+        elif message.text.startswith('/cancel'):
+            self.forwarder.reset_state()
+            self.combined.reset_state()
             await message.reply_text("⏹ Operations cancelled")
 
-        @bot.on_message(
-            (filters.text | filters.photo | filters.document |
-             filters.video | filters.audio | filters.voice |
-             filters.reply) & filters.create(is_bot_private_chat)
-        )
-        async def handle_messages(client: Client, message: Message):
-            print(f"📩 Processing message in bot's chat (ID: {message.id})")
-            if forward_bot.state.get('active'):
-                await forward_bot.handle_setup_message(message)
-            elif combined.state.get('active'):
-                if not combined.state.get('destination_chat'):
-                    await combined.handle_destination_input(message)
-                else:
-                    await combined.handle_link_collection(message)
-
-        @bot.on_message(~filters.create(is_bot_private_chat))
-        async def ignore_other_chats(client: Client, message: Message):
-            if message.chat.type == ChatType.PRIVATE:
-                print(f"🚫 Ignored message from other private chat (ID: {message.chat.id})")
+    async def process_messages(self, message: Message):
+        """Handle non-command messages during operations"""
+        if self.forwarder.state.get('active'):
+            await self.forwarder.handle_setup_message(message)
+        elif self.combined.state.get('active'):
+            if not self.combined.state.get('destination_chat'):
+                await self.combined.handle_destination_input(message)
             else:
-                print(f"🚫 Ignored message from group/channel (ID: {message.chat.id})")
-
-        print(f"🚀 Bot @{bot_username} is now running (only responds to its own private chat)")
-        await asyncio.Event().wait()
-
-    except Exception as e:
-        print(f"💥 Error: {e}")
-    finally:
-        if 'bot' in locals() and await bot.is_initialized:
-            await bot.stop()
-            print("✅ Bot stopped")
+                await self.combined.handle_link_collection(message)
 
 if __name__ == "__main__":
     # Create required directories
@@ -97,9 +104,10 @@ if __name__ == "__main__":
     os.makedirs("forward_temp", exist_ok=True)
     
     # Run the bot
+    bot = SecureBot()
     loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(run_bot())
+        loop.run_until_complete(bot.run())
     except KeyboardInterrupt:
         print("\n🛑 Bot stopped by user")
     finally:
