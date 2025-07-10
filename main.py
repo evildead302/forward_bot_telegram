@@ -6,7 +6,7 @@ from pyrogram.types import Message
 from pyrogram.enums import ChatType
 
 # --- 1. MANUAL MODIFY: Set your bot's username here ---
-BOT_USERNAME = "@your_bot_username"  # <-- Change this manually
+BOT_USERNAME = "@Saverestrictcontant2_bot"  # <-- Change this manually
 
 class SecureBot:
     def __init__(self):
