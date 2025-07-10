@@ -1,99 +1,140 @@
 import os
 import asyncio
-import tempfile
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import ChatType
-from pyrogram.errors import FloodWait
 
 class SecureBot:
     def __init__(self):
         self.bot = None
         self.bot_id = None
         self.bot_username = None
-        self.allowed_users = set()
         self.combined = None
         self.forwarder = None
-        self.session_name = "secure_bot_session"
 
     async def initialize(self):
-        """Initialize the bot with proper session handling"""
+        """Initialize the bot with session support"""
         try:
             self.bot = Client(
-                name=self.session_name,
+                "secure_bot_session",
                 api_id=int(os.environ.get("API_ID", 0)),
                 api_hash=os.environ.get("API_HASH", ""),
                 bot_token=os.environ.get("BOT_TOKEN", ""),
-                workdir="."  # Store session in current directory
+                session_string=os.environ.get("SESSION_STRING", ""),
+                in_memory=True
             )
             
-            # Connect and authenticate
             await self.bot.start()
-            
-            # Get bot info
             me = await self.bot.get_me()
             self.bot_id = me.id
             self.bot_username = me.username
-            print(f"🤖 Bot @{self.bot_username} (ID: {self.bot_id}) initialized and logged in")
             
+            if os.environ.get("SESSION_STRING"):
+                print("🔑 Using existing session string")
+            else:
+                print("🆕 Created new session")
+                # For new sessions, you could save the string here:
+                # with open("session.txt", "w") as f:
+                #     f.write(await self.bot.export_session_string())
+            
+            print(f"🤖 Bot @{me.username} (ID: {self.bot_id}) initialized")
+
             # Initialize modules
             import c_l
             from forward import ForwardBot
             self.combined = c_l.CombinedLinkForwarder(self.bot)
             self.forwarder = ForwardBot(self.bot)
             print("✅ Modules loaded")
-            
-            self.register_handlers()
-            return True
-            
-        except FloodWait as e:
-            print(f"⏳ Flood wait: Need to wait {e.value} seconds")
-            await asyncio.sleep(e.value)
-            return await self.initialize()
-        except Exception as e:
-            print(f"💥 Login failed: {str(e)}")
-            return False
 
-    def is_allowed_chat(self, message: Message):
-        """Check if message is from allowed user"""
-        return message.chat.type == ChatType.PRIVATE
+            self.register_handlers()
+
+        except Exception as e:
+            print(f"❌ Initialization failed: {e}")
+            await self.shutdown()
+            raise
+
+    def is_bot_chat(self, message: Message):
+        """Strict check - only allows messages in bot's direct private chat"""
+        return (message.chat.type == ChatType.PRIVATE and 
+                message.from_user is not None and
+                message.chat.id == message.from_user.id and
+                message.chat.id == self.bot_id)
 
     def register_handlers(self):
-        """Register all message handlers"""
-        @self.bot.on_message(filters.command("start") & filters.private)
+        """Register all message handlers with strict filtering"""
+        @self.bot.on_message(filters.command("start") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
         async def start(client: Client, message: Message):
-            self.allowed_users.add(message.from_user.id)
             await message.reply_text(
-                "🤖 Bot Ready!\n\n"
+                "🤖 Secure Bot\n\n"
                 "Available commands:\n"
+                "/cl - Process links\n"
+                "/forward - Forward messages\n"
+                "/cancel - Cancel operation\n"
+                "/help - Show help"
+            )
+
+        @self.bot.on_message(filters.command("forward") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        async def forward_cmd(client: Client, message: Message):
+            await self.forwarder.start_forward_setup(message)
+
+        @self.bot.on_message(filters.command("cl") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        async def combined_cmd(client: Client, message: Message):
+            await self.combined.start_combined_process(message)
+
+        @self.bot.on_message(filters.command("cancel") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        async def cancel_cmd(client: Client, message: Message):
+            self.combined.reset_state()
+            self.forwarder.reset_state()
+            await message.reply_text("⏹ Operation cancelled")
+
+        @self.bot.on_message(filters.command("help") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        async def help_cmd(client: Client, message: Message):
+            await message.reply_text(
+                "🆘 Help Information\n\n"
                 "/cl - Process links\n"
                 "/forward - Forward messages\n"
                 "/cancel - Cancel operation"
             )
 
-        # [Add your other handlers here...]
+        @self.bot.on_message(
+            (filters.text | filters.photo | filters.document |
+             filters.video | filters.audio | filters.voice |
+             filters.reply) & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        async def handle_messages(client: Client, message: Message):
+            if self.combined.state.get('active'):
+                await self.combined.handle_message_flow(message)
+            elif self.forwarder.state.get('active'):
+                await self.forwarder.handle_setup_message(message)
+
+        @self.bot.on_message(~filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        async def ignore_other_messages(_, message: Message):
+            if message.chat.type == ChatType.PRIVATE:
+                await message.reply(f"❌ Please message @{self.bot_username} directly.")
+            print(f"🚫 Ignored message from {message.from_user.id if message.from_user else 'unknown'}")
 
     async def run(self):
         """Main bot running loop"""
         try:
-            if await self.initialize():
-                print("🚀 Bot is now running")
-                await asyncio.Event().wait()  # Run forever
-            else:
-                print("❌ Bot failed to start")
+            await self.initialize()
+            print("🚀 Bot is now running (Ctrl+C to stop)")
+            await asyncio.Event().wait()
         except Exception as e:
             print(f"💥 Error: {e}")
         finally:
             await self.shutdown()
 
     async def shutdown(self):
-        """Graceful shutdown"""
-        if self.bot:
+        """Graceful shutdown procedure"""
+        if self.bot and self.bot.is_initialized:
             try:
+                # Optional: Save session on shutdown if new session was created
+                # if not os.environ.get("SESSION_STRING"):
+                #     with open("session.txt", "w") as f:
+                #         f.write(await self.bot.export_session_string())
                 await self.bot.stop()
                 print("✅ Bot stopped gracefully")
-            except:
-                pass
+            except Exception as e:
+                print(f"⚠️ Error during shutdown: {e}")
 
 def create_temp_dirs():
     """Create required temporary directories"""
@@ -107,7 +148,6 @@ if __name__ == "__main__":
     
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
     try:
         loop.run_until_complete(bot.run())
     except KeyboardInterrupt:
