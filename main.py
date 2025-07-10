@@ -2,7 +2,7 @@ import os
 import tempfile
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from pyrogram.enums import MessageEntityType
+from pyrogram.enums import MessageEntityType, ChatType
 
 # Check if required module exists
 try:
@@ -36,7 +36,14 @@ except Exception as e:
     print(f"❌ Module initialization failed: {e}")
     raise
 
-@bot.on_message(filters.command("start"))
+def is_bot_chat(_, __, message: Message):
+    """Check if message is sent directly to the bot"""
+    return message.chat.type == ChatType.BOT
+
+# Create custom filter
+bot_chat_filter = filters.create(is_bot_chat)
+
+@bot.on_message(filters.command("start") & bot_chat_filter)
 async def start(client: Client, message: Message):
     await message.reply_text(
         "🤖 Combined Link Forwarder Bot\n\n"
@@ -47,21 +54,21 @@ async def start(client: Client, message: Message):
         "/help - Show help"
     )
 
-@bot.on_message(filters.command("forward"))
+@bot.on_message(filters.command("forward") & bot_chat_filter)
 async def forward_cmd(client: Client, message: Message):
     await forwarder.start_forward_setup(message)
 
-@bot.on_message(filters.command("cl"))
+@bot.on_message(filters.command("cl") & bot_chat_filter)
 async def combined_cmd(client: Client, message: Message):
     await combined.start_combined_process(message)
 
-@bot.on_message(filters.command("cancel"))
+@bot.on_message(filters.command("cancel") & bot_chat_filter)
 async def cancel_cmd(client: Client, message: Message):
     combined.reset_state()
     forwarder.reset_state()
     await message.reply_text("⏹ Operation cancelled and state reset")
 
-@bot.on_message(filters.command("help"))
+@bot.on_message(filters.command("help") & bot_chat_filter)
 async def help_cmd(client: Client, message: Message):
     await message.reply_text(
         "🆘 Help Information\n\n"
@@ -95,9 +102,10 @@ def has_quote_entities(filter, client, message: Message):
     return any(entity.type in quote_entity_types for entity in message.entities)
 
 @bot.on_message(
-    filters.text | filters.photo | filters.document |
-    filters.video | filters.audio | filters.voice |
-    filters.reply | filters.create(has_quote_entities)
+    (filters.text | filters.photo | filters.document |
+     filters.video | filters.audio | filters.voice |
+     filters.reply | filters.create(has_quote_entities)) &
+    bot_chat_filter
 )
 async def handle_messages(client: Client, message: Message):
     if combined.state.get('active'):
@@ -107,6 +115,11 @@ async def handle_messages(client: Client, message: Message):
             await combined.handle_link_collection(message)
     elif forwarder.state.get('active'):
         await forwarder.handle_setup_message(message)
+
+# Ignore all non-bot messages
+@bot.on_message(~bot_chat_filter)
+async def ignore_other_chats(client: Client, message: Message):
+    pass
 
 def create_temp_dirs():
     """Create required temp directories"""
