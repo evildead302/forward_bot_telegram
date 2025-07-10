@@ -6,7 +6,6 @@ from pyrogram.enums import ParseMode, ChatType
 
 class SecureBot:
     def __init__(self):
-        # Bot client (required for bot functionality)
         self.bot = Client(
             "bot_session",
             api_id=int(os.environ["API_ID"]),
@@ -15,7 +14,6 @@ class SecureBot:
             in_memory=True
         )
         
-        # User client (optional, for owner detection)
         self.user_client = None
         if os.environ.get("SESSION_STRING"):
             self.user_client = Client(
@@ -29,16 +27,13 @@ class SecureBot:
 
     async def initialize(self):
         """Initialize all components"""
-        # Start bot client first
         await self.bot.start()
         self.bot_id = (await self.bot.get_me()).id
         
-        # Initialize user session if available
         if self.user_client:
             await self.user_client.start()
             self.owner_id = (await self.user_client.get_me()).id
         
-        # Initialize modules
         from forward import ForwardBot
         import c_l
         self.forwarder = ForwardBot(self.bot)
@@ -46,8 +41,8 @@ class SecureBot:
 
         print(f"✅ Bot ready | Owner: {self.owner_id} | Bot: {self.bot_id}")
 
-    async def is_authorized(self, _, __, message: Message):
-        """Security verification"""
+    async def is_authorized(self, client: Client, message: Message):
+        """Security verification (now properly takes 3 parameters)"""
         if not message.from_user:
             return False
         if self.owner_id and message.from_user.id != self.owner_id:
@@ -65,17 +60,18 @@ class SecureBot:
         try:
             await self.initialize()
             
-            # Register commands using BOT client only
             if self.bot.is_initialized:
                 await self.bot.set_bot_commands([
                     BotCommand("start", "Bot information"),
                     BotCommand("forward", "Message forwarding"),
-                    BotCommand("cl", "Link forwarding"), 
+                    BotCommand("cl", "Link forwarding"),
                     BotCommand("cancel", "Cancel operations")
                 ])
 
-            # Command handlers
-            @self.bot.on_message(filters.command("start") & filters.create(self.is_authorized))
+            # Create filter instance bound to this object
+            auth_filter = filters.create(self.is_authorized)
+
+            @self.bot.on_message(filters.command("start") & auth_filter)
             async def start(_, message: Message):
                 await message.reply_text(
                     f"👑 Owner: <code>{self.owner_id}</code>\n"
@@ -87,22 +83,21 @@ class SecureBot:
                     parse_mode=ParseMode.HTML
                 )
 
-            @self.bot.on_message(filters.command("forward") & filters.private & filters.create(self.is_authorized))
+            @self.bot.on_message(filters.command("forward") & filters.private & auth_filter)
             async def forward_cmd(_, message: Message):
                 await self.forwarder.start_forward_setup(message)
 
-            @self.bot.on_message(filters.command("cl") & filters.create(self.is_authorized))
+            @self.bot.on_message(filters.command("cl") & auth_filter)
             async def combined_cmd(_, message: Message):
                 await self.combined.start_combined_process(message)
 
-            @self.bot.on_message(filters.command("cancel") & filters.create(self.is_authorized))
+            @self.bot.on_message(filters.command("cancel") & auth_filter)
             async def cancel_cmd(_, message: Message):
                 self.forwarder.reset_state()
                 self.combined.reset_state()
                 await message.reply_text("🛑 All operations cancelled")
 
-            # Message processing
-            @self.bot.on_message(filters.create(self.is_authorized))
+            @self.bot.on_message(auth_filter)
             async def handle_messages(_, message: Message):
                 if self.forwarder.state.get('active'):
                     await self.forwarder.handle_setup_message(message)
@@ -112,8 +107,7 @@ class SecureBot:
                     else:
                         await self.combined.handle_link_collection(message)
 
-            # Ignore unauthorized messages
-            @self.bot.on_message(~filters.create(self.is_authorized))
+            @self.bot.on_message(~auth_filter)
             async def ignore_unauthorized(_, __):
                 return
 
@@ -123,7 +117,6 @@ class SecureBot:
         except Exception as e:
             print(f"💥 Error: {str(e)}")
         finally:
-            # Clean shutdown
             if hasattr(self, 'bot') and self.bot.is_initialized:
                 await self.bot.stop()
             if hasattr(self, 'user_client') and self.user_client and self.user_client.is_initialized:
@@ -131,7 +124,6 @@ class SecureBot:
             print("🛑 Bot shutdown complete")
 
 if __name__ == "__main__":
-    # Create and manage event loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
