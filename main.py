@@ -26,10 +26,12 @@ except Exception as e:
     print(f"❌ Bot initialization failed: {e}")
     raise
 
-# Initialize module with verification
+# Initialize modules with verification
 try:
     combined = c_l.CombinedLinkForwarder(bot)
-    print("✅ Module initialized")
+    from forward import ForwardBot
+    forwarder = ForwardBot(bot)
+    print("✅ Modules initialized")
 except Exception as e:
     print(f"❌ Module initialization failed: {e}")
     raise
@@ -40,17 +42,14 @@ async def start(client: Client, message: Message):
         "🤖 Combined Link Forwarder Bot\n\n"
         "Available commands:\n"
         "/cl - Combined link clicker and forwarder\n"
-        "/forward - Message forwarding\n"  # Added this line
+        "/forward - Message forwarding\n"
         "/cancel - Cancel current operation\n"
         "/help - Show help"
     )
 
-@bot.on_message(filters.command("forward"))  # Added this handler
+@bot.on_message(filters.command("forward"))
 async def forward_cmd(client: Client, message: Message):
-    await message.reply_text(
-        "📤 Forwarding mode\n\n"
-        "Please send the message you want to forward"
-    )
+    await forwarder.start_forward_setup(message)
 
 @bot.on_message(filters.command("cl"))
 async def combined_cmd(client: Client, message: Message):
@@ -59,6 +58,7 @@ async def combined_cmd(client: Client, message: Message):
 @bot.on_message(filters.command("cancel"))
 async def cancel_cmd(client: Client, message: Message):
     combined.reset_state()
+    forwarder.reset_state()
     await message.reply_text("⏹ Operation cancelled and state reset")
 
 @bot.on_message(filters.command("help"))
@@ -69,7 +69,7 @@ async def help_cmd(client: Client, message: Message):
         "1. First provide destination chat\n"
         "2. Then provide links to process\n"
         "3. Bot will click links and forward responses\n"
-        "/forward - Forward messages\n"  # Added this line
+        "/forward - Forward messages between chats\n"
         "/cancel - Cancel current operation\n"
     )
 
@@ -105,11 +105,14 @@ async def handle_messages(client: Client, message: Message):
             await combined.handle_destination_input(message)
         else:
             await combined.handle_link_collection(message)
+    elif forwarder.state.get('active'):
+        await forwarder.handle_setup_message(message)
 
 def create_temp_dirs():
     """Create required temp directories"""
     dir_names = [
-        "temp_cl_data"
+        "temp_cl_data",
+        "forward_temp"
     ]
     for dir_name in dir_names:
         try:
