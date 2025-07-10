@@ -15,7 +15,7 @@ class SecureBot:
         self.forwarder = None
         self.session_file = "bot_session"
         self.max_retries = 3
-        self.retry_delay = 10  # Increased delay for better recovery
+        self.retry_delay = 10
 
     async def initialize(self):
         """Initialize the bot with proper session management"""
@@ -28,7 +28,7 @@ class SecureBot:
                     api_id=int(os.environ.get("API_ID", 0)),
                     api_hash=os.environ.get("API_HASH", ""),
                     bot_token=os.environ.get("BOT_TOKEN", ""),
-                    workdir=".",  # Store session file in current directory
+                    workdir=".",
                 )
                 
                 await self.bot.start()
@@ -66,7 +66,53 @@ class SecureBot:
         print(f"💥 Failed to initialize after {self.max_retries} attempts")
         return False
 
-    # [Rest of your methods remain the same as previous version...]
+    def is_verified_user(self, message: Message):
+        """Check if message is from verified user"""
+        return (message.chat.type == ChatType.PRIVATE and 
+                message.from_user and 
+                message.from_user.id in self.allowed_users)
+
+    def register_handlers(self):
+        """Register all message handlers"""
+        @self.bot.on_message(filters.private & ~filters.create(lambda _, __, m: self.is_verified_user(m)))
+        async def verify_user(client: Client, message: Message):
+            self.allowed_users.add(message.from_user.id)
+            await message.reply_text(
+                f"✅ Verification successful!\n"
+                f"Your User ID: {message.from_user.id}\n\n"
+                "Available commands:\n"
+                "/cl - Process links\n"
+                "/forward - Forward messages\n"
+                "/cancel - Cancel operation\n"
+                "/help - Show help"
+            )
+
+        @self.bot.on_message(filters.command("start") & filters.private)
+        async def start(client: Client, message: Message):
+            if message.from_user.id not in self.allowed_users:
+                self.allowed_users.add(message.from_user.id)
+                
+            await message.reply_text(
+                "🤖 Combined Link Forwarder Bot\n\n"
+                "Available commands:\n"
+                "/cl - Process links\n"
+                "/forward - Forward messages\n"
+                "/cancel - Cancel operation\n"
+                "/help - Show help"
+            )
+
+        # [Other handlers remain the same as previous version...]
+
+    async def run(self):
+        """Main bot running loop"""
+        try:
+            if await self.initialize():
+                print("🚀 Bot is now running")
+                await asyncio.Event().wait()  # Run forever
+        except Exception as e:
+            print(f"💥 Error: {e}")
+        finally:
+            await self.shutdown()
 
     async def shutdown(self):
         """Graceful shutdown with session preservation"""
