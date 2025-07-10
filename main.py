@@ -9,8 +9,11 @@ class SecureBot:
     def __init__(self):
         self.bot = None
         self.bot_id = None
+        self.bot_username = None  # Will be set during initialization
+        self.allowed_users = set()  # Store allowed user IDs
         self.combined = None
         self.forwarder = None
+        self.username_waiting = True  # Flag for username verification phase
 
     async def initialize(self):
         """Initialize the bot and all components"""
@@ -25,8 +28,8 @@ class SecureBot:
         await self.bot.start()
         me = await self.bot.get_me()
         self.bot_id = me.id
-        print(f"🤖 Bot @{me.username} (ID: {self.bot_id}) initialized")
-        print("🕒 Waiting for messages in bot's self-chat...")
+        self.bot_username = me.username  # Store bot username
+        print(f"🤖 Bot @{self.bot_username} (ID: {self.bot_id}) initialized")
 
         # Initialize modules
         import c_l
@@ -38,48 +41,66 @@ class SecureBot:
         # Register handlers
         self.register_handlers()
 
-    def is_bot_self_chat(self, message: Message):
-        """Check if message is in bot's self-chat"""
-        return message.chat.id == self.bot_id
+    def is_allowed_chat(self, message: Message):
+        """Check if message is from an allowed user"""
+        # During username waiting phase, only accept messages containing bot username
+        if self.username_waiting:
+            return (message.text and 
+                    f"@{self.bot_username}" in message.text.lower() and
+                    message.chat.type == ChatType.PRIVATE)
+        
+        # After verification, check against allowed users
+        return (message.chat.type == ChatType.PRIVATE and 
+                message.from_user and 
+                message.from_user.id in self.allowed_users)
 
     def register_handlers(self):
         """Register all message handlers"""
-        @self.bot.on_message(filters.create(lambda _, __, m: self.is_bot_self_chat(m)))
-        async def handle_self_chat_messages(client: Client, message: Message):
-            # Process commands normally
-            if message.text and message.text.startswith("/"):
-                await self.process_command(message)
-            elif self.combined.state.get('active'):
-                await self.combined.handle_message_flow(message)
-            elif self.forwarder.state.get('active'):
-                await self.forwarder.handle_setup_message(message)
+        # Handler for initial username verification
+        @self.bot.on_message(filters.private & ~filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        async def initial_verification(client: Client, message: Message):
+            if self.username_waiting and message.text and f"@{self.bot_username}" in message.text.lower():
+                self.allowed_users.add(message.from_user.id)
+                self.username_waiting = False
+                await message.reply_text(
+                    f"✅ Verification successful! You can now use the bot.\n"
+                    f"Your User ID: {message.from_user.id}\n\n"
+                    f"Available commands:\n"
+                    "/cl - Process links\n"
+                    "/forward - Forward messages\n"
+                    "/cancel - Cancel operation\n"
+                    "/help - Show help"
+                )
+                return
+            await message.reply_text(f"Please start by sending a message containing @{self.bot_username}")
 
-        @self.bot.on_message(~filters.create(lambda _, __, m: self.is_bot_self_chat(m)))
-        async def ignore_other_messages(_, message: Message):
-            print(f"🚫 Ignored message from chat {message.chat.id} (type: {message.chat.type})")
-
-    async def process_command(self, message: Message):
-        """Process bot commands"""
-        command = message.text.split()[0].lower()
-        
-        if command == "/start":
+        @self.bot.on_message(filters.command("start") & filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        async def start(client: Client, message: Message):
             await message.reply_text(
-                "🤖 Secure Bot (Self-Chat Mode)\n\n"
+                "🤖 Combined Link Forwarder Bot\n\n"
                 "Available commands:\n"
                 "/cl - Process links\n"
                 "/forward - Forward messages\n"
                 "/cancel - Cancel operation\n"
                 "/help - Show help"
             )
-        elif command == "/forward":
+
+        @self.bot.on_message(filters.command("forward") & filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        async def forward_cmd(client: Client, message: Message):
             await self.forwarder.start_forward_setup(message)
-        elif command == "/cl":
+
+        @self.bot.on_message(filters.command("cl") & filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        async def combined_cmd(client: Client, message: Message):
             await self.combined.start_combined_process(message)
-        elif command == "/cancel":
+
+        @self.bot.on_message(filters.command("cancel") & filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        async def cancel_cmd(client: Client, message: Message):
             self.combined.reset_state()
             self.forwarder.reset_state()
             await message.reply_text("⏹ Operation cancelled")
-        elif command == "/help":
+
+        @self.bot.on_message(filters.command("help") & filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        async def help_cmd(client: Client, message: Message):
             await message.reply_text(
                 "🆘 Help Information\n\n"
                 "/cl - Process links\n"
@@ -87,11 +108,27 @@ class SecureBot:
                 "/cancel - Cancel operation"
             )
 
+        @self.bot.on_message(
+            (filters.text | filters.photo | filters.document |
+             filters.video | filters.audio | filters.voice |
+             filters.reply) & filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        async def handle_messages(client: Client, message: Message):
+            if self.combined.state.get('active'):
+                await self.combined.handle_message_flow(message)
+            elif self.forwarder.state.get('active'):
+                await self.forwarder.handle_setup_message(message)
+
+        @self.bot.on_message(~filters.create(lambda _, __, m: self.is_allowed_chat(m)))
+        async def ignore_other_messages(_, message: Message):
+            user_info = f"user {message.from_user.id}" if message.from_user else "unknown"
+            chat_info = f"chat {message.chat.id} (type: {message.chat.type})"
+            print(f"🚫 Ignored message from {user_info} in {chat_info}")
+
     async def run(self):
         """Main bot running loop"""
         try:
             await self.initialize()
-            print(f"🚀 Bot is now running (only responds in self-chat ID: {self.bot_id})")
+            print(f"🚀 Bot is now running. Users must send @{self.bot_username} to verify")
             await asyncio.Event().wait()  # Run forever
         except Exception as e:
             print(f"💥 Error: {e}")
