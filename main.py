@@ -3,12 +3,12 @@ import asyncio
 import tempfile
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from pyrogram.enums import MessageEntityType
+from pyrogram.enums import ChatType
 
 class SecureBot:
     def __init__(self):
         self.bot = None
-        self.bot_username = None
+        self.bot_id = None
         self.combined = None
         self.forwarder = None
 
@@ -24,8 +24,8 @@ class SecureBot:
         
         await self.bot.start()
         me = await self.bot.get_me()
-        self.bot_username = me.username.lower()
-        print(f"🤖 Bot @{self.bot_username} initialized")
+        self.bot_id = me.id
+        print(f"🤖 Bot @{me.username} (ID: {self.bot_id}) initialized")
 
         # Initialize modules
         import c_l
@@ -37,14 +37,13 @@ class SecureBot:
         # Register handlers
         self.register_handlers()
 
+    def is_bot_chat(self, _, __, message: Message):
+        """Check if message is in bot's private chat"""
+        return message.chat.type == ChatType.PRIVATE and message.chat.id == self.bot_id
+
     def register_handlers(self):
         """Register all message handlers"""
-        
-        def is_bot_chat(_, __, message: Message):
-            """Strict filter to only allow messages in bot's private chat"""
-            return message.chat.type == "private"
-
-        bot_chat_filter = filters.create(is_bot_chat)
+        bot_chat_filter = filters.create(self.is_bot_chat)
 
         @self.bot.on_message(filters.command("start") & bot_chat_filter)
         async def start(client: Client, message: Message):
@@ -91,9 +90,9 @@ class SecureBot:
             elif self.forwarder.state.get('active'):
                 await self.forwarder.handle_setup_message(message)
 
-        @self.bot.on_message(~bot_chat_filter)
+        @self.bot.on_message(~filters.create(self.is_bot_chat))
         async def ignore_other_messages(_, message: Message):
-            print(f"🚫 Ignored message from {message.chat.id}")
+            print(f"🚫 Ignored message from {message.from_user.id if message.from_user else 'unknown'} in chat {message.chat.id}")
 
     async def run(self):
         """Main bot running loop"""
