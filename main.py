@@ -13,36 +13,54 @@ class SecureBot:
         self.forwarder = None
 
     async def initialize(self):
-        """Initialize the bot with proper session handling"""
+        """Initialize the bot with session string support"""
         try:
+            # Initialize with both bot token and session string
             self.bot = Client(
-                "secure_bot",
+                "secure_bot_session",
                 api_id=int(os.environ.get("API_ID", 0)),
                 api_hash=os.environ.get("API_HASH", ""),
                 bot_token=os.environ.get("BOT_TOKEN", ""),
+                session_string=os.environ.get("SESSION_STRING", ""),
                 in_memory=True
             )
             
-            # Explicit login with error handling
+            # Explicit login with verification
+            await self.bot.start()
+            
+            # Verify login
             try:
-                await self.bot.start()
                 me = await self.bot.get_me()
+                if not me:
+                    raise ConnectionError("Failed to get bot info after login")
+                
                 self.bot_id = me.id
                 self.bot_username = me.username
-                print(f"✅ Bot @{me.username} (ID: {self.bot_id}) successfully logged in")
-            except Exception as login_error:
-                print(f"❌ Login failed: {login_error}")
+                
+                # Print session info
+                if os.environ.get("SESSION_STRING"):
+                    print("🔑 Logged in using existing session string")
+                else:
+                    print("🆕 Created new session")
+                    # Optionally save new session string
+                    # with open("session.txt", "w") as f:
+                    #     f.write(await self.bot.export_session_string())
+                
+                print(f"✅ Bot @{me.username} (ID: {me.id}) successfully initialized")
+                
+            except Exception as auth_error:
+                print(f"❌ Login verification failed: {auth_error}")
                 raise
-            
+
             # Initialize modules
             try:
                 import c_l
                 from forward import ForwardBot
                 self.combined = c_l.CombinedLinkForwarder(self.bot)
                 self.forwarder = ForwardBot(self.bot)
-                print("✅ Modules loaded")
+                print("✅ All modules loaded successfully")
             except Exception as module_error:
-                print(f"❌ Module loading failed: {module_error}")
+                print(f"❌ Module initialization failed: {module_error}")
                 raise
 
             self.register_handlers()
@@ -137,9 +155,15 @@ class SecureBot:
             await self.shutdown()
 
     async def shutdown(self):
-        """Graceful shutdown procedure"""
+        """Graceful shutdown with session cleanup"""
         if self.bot and await self.bot.is_initialized:
             try:
+                # Optionally save session on shutdown
+                # if not os.environ.get("SESSION_STRING"):
+                #     session_string = await self.bot.export_session_string()
+                #     with open("session.txt", "w") as f:
+                #         f.write(session_string)
+                
                 await self.bot.stop()
                 print("✅ Bot stopped gracefully")
             except Exception as e:
