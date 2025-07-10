@@ -8,30 +8,45 @@ from pyrogram.enums import ChatType
 class SecureBot:
     def __init__(self):
         self.bot = None
+        self.user = None  # User client
         self.bot_username = None
         self.combined = None
         self.forwarder = None
 
     async def initialize(self):
-        """Initialize the bot and all components"""
+        """Initialize both bot and user sessions"""
+        # Initialize bot client
         self.bot = Client(
-            "main_bot",
-            api_id=int(os.environ.get("API_ID", 0)),
-            api_hash=os.environ.get("API_HASH", ""),
-            bot_token=os.environ.get("BOT_TOKEN", ""),
+            "bot_account",
+            api_id=int(os.environ["API_ID"]),
+            api_hash=os.environ["API_HASH"],
+            bot_token=os.environ["BOT_TOKEN"],
             in_memory=True
         )
+        
+        # Initialize user client if session string exists
+        if os.environ.get("SESSION_STRING"):
+            self.user = Client(
+                "user_account",
+                api_id=int(os.environ["API_ID"]),
+                api_hash=os.environ["API_HASH"],
+                session_string=os.environ["SESSION_STRING"],
+                in_memory=True
+            )
+            await self.user.start()
+            print("👤 User session initialized")
         
         await self.bot.start()
         me = await self.bot.get_me()
         self.bot_username = me.username.lower()
         print(f"🤖 Bot @{self.bot_username} initialized")
 
-        # Initialize modules
+        # Initialize modules with user client if available
         import c_l
         from forward import ForwardBot
-        self.combined = c_l.CombinedLinkForwarder(self.bot)
-        self.forwarder = ForwardBot(self.bot)
+        client_to_use = self.user if self.user else self.bot
+        self.combined = c_l.CombinedLinkForwarder(client_to_use)
+        self.forwarder = ForwardBot(client_to_use)
         print("✅ Modules loaded")
 
         # Register handlers
@@ -39,7 +54,6 @@ class SecureBot:
 
     def is_bot_chat(self, message: Message):
         """Check if message is in bot's private chat"""
-        # Allow all private chats with the bot
         return message.chat.type == ChatType.PRIVATE
 
     def register_handlers(self):
@@ -93,7 +107,7 @@ class SecureBot:
 
         @self.bot.on_message(~bot_chat_filter)
         async def ignore_other_messages(_, message: Message):
-            print(f"🚫 Ignored message from {message.from_user.id if message.from_user else 'unknown'} in chat {message.chat.id} (type: {message.chat.type})")
+            print(f"🚫 Ignored message from {message.from_user.id if message.from_user else 'unknown'} in chat {message.chat.id}")
 
     async def run(self):
         """Main bot running loop"""
@@ -111,9 +125,16 @@ class SecureBot:
         if self.bot and self.bot.is_initialized:
             try:
                 await self.bot.stop()
-                print("✅ Bot stopped gracefully")
             except Exception as e:
-                print(f"⚠️ Error during shutdown: {e}")
+                print(f"⚠️ Error stopping bot: {e}")
+        
+        if self.user and self.user.is_initialized:
+            try:
+                await self.user.stop()
+            except Exception as e:
+                print(f"⚠️ Error stopping user client: {e}")
+        
+        print("✅ All clients stopped")
 
 def create_temp_dirs():
     """Create required temporary directories"""
