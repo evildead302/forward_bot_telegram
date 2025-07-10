@@ -27,12 +27,14 @@ async def run_bot():
         forward_bot = ForwardBot(bot)
 
         def is_bot_private_chat(_, __, message: Message):
-            """Correct filter signature with 3 parameters"""
-            return (message.chat.type == ChatType.PRIVATE and 
-                    message.chat.id == bot_id)
+            """Strict filter for bot's own private chat"""
+            is_private = message.chat.type == ChatType.PRIVATE
+            is_bot_chat = message.chat.id == bot_id
+            return is_private and is_bot_chat
 
         @bot.on_message(filters.command("start") & filters.create(is_bot_private_chat))
         async def start(client: Client, message: Message):
+            print(f"📩 Received /start in bot's chat (ID: {message.chat.id})")
             await message.reply_text(
                 "🤖 Bot Menu\n\n"
                 "/forward - Forward messages\n"
@@ -42,14 +44,17 @@ async def run_bot():
 
         @bot.on_message(filters.command("forward") & filters.create(is_bot_private_chat))
         async def forward_cmd(client: Client, message: Message):
+            print(f"📩 Received /forward in bot's chat (ID: {message.chat.id})")
             await forward_bot.start_forward_setup(message)
 
         @bot.on_message(filters.command("cl") & filters.create(is_bot_private_chat))
         async def combined_cmd(client: Client, message: Message):
+            print(f"📩 Received /cl in bot's chat (ID: {message.chat.id})")
             await combined.start_combined_process(message)
 
         @bot.on_message(filters.command("cancel") & filters.create(is_bot_private_chat))
         async def cancel_cmd(client: Client, message: Message):
+            print(f"📩 Received /cancel in bot's chat (ID: {message.chat.id})")
             forward_bot.reset_state()
             combined.reset_state()
             await message.reply_text("⏹ Operations cancelled")
@@ -60,6 +65,7 @@ async def run_bot():
              filters.reply) & filters.create(is_bot_private_chat)
         )
         async def handle_messages(client: Client, message: Message):
+            print(f"📩 Processing message in bot's chat (ID: {message.id})")
             if forward_bot.state.get('active'):
                 await forward_bot.handle_setup_message(message)
             elif combined.state.get('active'):
@@ -70,10 +76,12 @@ async def run_bot():
 
         @bot.on_message(~filters.create(is_bot_private_chat))
         async def ignore_other_chats(client: Client, message: Message):
-            if message.chat.type == ChatType.PRIVATE and message.chat.id != bot_id:
-                await message.reply("❌ This bot only responds in its private chat")
+            if message.chat.type == ChatType.PRIVATE:
+                print(f"🚫 Ignored message from other private chat (ID: {message.chat.id})")
+            else:
+                print(f"🚫 Ignored message from group/channel (ID: {message.chat.id})")
 
-        print("🚀 Bot is now running (only responds to its private chat)")
+        print(f"🚀 Bot @{bot_username} is now running (only responds to its own private chat)")
         await asyncio.Event().wait()
 
     except Exception as e:
@@ -84,9 +92,11 @@ async def run_bot():
             print("✅ Bot stopped")
 
 if __name__ == "__main__":
+    # Create required directories
     os.makedirs("temp_cl_data", exist_ok=True)
     os.makedirs("forward_temp", exist_ok=True)
     
+    # Run the bot
     loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(run_bot())
