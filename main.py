@@ -6,33 +6,39 @@ from pyrogram.enums import ParseMode, ChatType
 
 class SecureBot:
     def __init__(self):
+        # Bot client (required for bot functionality)
         self.bot = Client(
-            "secure_session",
+            "bot_session",
             api_id=int(os.environ["API_ID"]),
             api_hash=os.environ["API_HASH"],
             bot_token=os.environ["BOT_TOKEN"],
-            session_string=os.environ.get("SESSION_STRING"),
             in_memory=True
         )
+        
+        # User client (optional, for owner detection)
+        self.user_client = None
+        if os.environ.get("SESSION_STRING"):
+            self.user_client = Client(
+                "user_session",
+                session_string=os.environ["SESSION_STRING"],
+                in_memory=True
+            )
+        
         self.owner_id = None
         self.bot_id = None
 
     async def initialize(self):
-        """Initialize all components with proper loop management"""
+        """Initialize all components"""
+        # Start bot client first
         await self.bot.start()
         self.bot_id = (await self.bot.get_me()).id
         
-        if self.bot.session_string:
-            user_client = Client(
-                "user_session",
-                session_string=self.bot.session_string,
-                in_memory=True
-            )
-            await user_client.start()
-            self.owner_id = (await user_client.get_me()).id
-            await user_client.stop()
-
-        # Initialize modules after clients are ready
+        # Initialize user session if available
+        if self.user_client:
+            await self.user_client.start()
+            self.owner_id = (await self.user_client.get_me()).id
+        
+        # Initialize modules
         from forward import ForwardBot
         import c_l
         self.forwarder = ForwardBot(self.bot)
@@ -44,7 +50,7 @@ class SecureBot:
         """Security verification"""
         if not message.from_user:
             return False
-        if message.from_user.id not in [self.owner_id, self.bot_id]:
+        if self.owner_id and message.from_user.id != self.owner_id:
             return False
         if message.chat.type == ChatType.PRIVATE:
             return True
@@ -55,17 +61,18 @@ class SecureBot:
             return False
 
     async def run(self):
-        """Main bot operation with proper loop handling"""
+        """Main bot operation"""
         try:
             await self.initialize()
             
-            # Register commands
-            await self.bot.set_bot_commands([
-                BotCommand("start", "Bot information"),
-                BotCommand("forward", "Message forwarding"),
-                BotCommand("cl", "Link forwarding"),
-                BotCommand("cancel", "Cancel operations")
-            ])
+            # Register commands using BOT client only
+            if self.bot.is_initialized:
+                await self.bot.set_bot_commands([
+                    BotCommand("start", "Bot information"),
+                    BotCommand("forward", "Message forwarding"),
+                    BotCommand("cl", "Link forwarding"), 
+                    BotCommand("cancel", "Cancel operations")
+                ])
 
             # Command handlers
             @self.bot.on_message(filters.command("start") & filters.create(self.is_authorized))
@@ -105,7 +112,7 @@ class SecureBot:
                     else:
                         await self.combined.handle_link_collection(message)
 
-            # Ignore unauthorized
+            # Ignore unauthorized messages
             @self.bot.on_message(~filters.create(self.is_authorized))
             async def ignore_unauthorized(_, __):
                 return
@@ -113,25 +120,23 @@ class SecureBot:
             print("🚀 Bot is now running")
             await asyncio.Event().wait()
 
-        except asyncio.CancelledError:
-            print("🛑 Received shutdown signal")
         except Exception as e:
             print(f"💥 Error: {str(e)}")
         finally:
+            # Clean shutdown
             if hasattr(self, 'bot') and self.bot.is_initialized:
                 await self.bot.stop()
+            if hasattr(self, 'user_client') and self.user_client and self.user_client.is_initialized:
+                await self.user_client.stop()
             print("🛑 Bot shutdown complete")
 
-async def main():
-    bot = SecureBot()
-    await bot.run()
-
 if __name__ == "__main__":
-    # Create and manage a single event loop
+    # Create and manage event loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(main())
+        bot = SecureBot()
+        loop.run_until_complete(bot.run())
     except KeyboardInterrupt:
         print("\n🛑 Manual shutdown requested")
     finally:
