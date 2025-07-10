@@ -1,93 +1,109 @@
 import os
 import asyncio
 from pyrogram import Client, filters
-from pyrogram.types import Message, BotCommand
-from pyrogram.enums import ParseMode
+from pyrogram.types import Message
+from pyrogram.enums import MessageEntityType
 
-class Bot:
-    def __init__(self):
-        self.bot = Client(
-            "my_bot",
-            api_id=int(os.environ["API_ID"]),
-            api_hash=os.environ["API_HASH"],
-            bot_token=os.environ["BOT_TOKEN"],
-            in_memory=True
-        )
-        self.bot_id = None
-        self.forwarder = None
-        self.combined = None
+# Initialize bot with error handling
+bot = Client(
+    "main_bot",
+    api_id=int(os.environ.get("API_ID", 0)),
+    api_hash=os.environ.get("API_HASH", ""),
+    bot_token=os.environ.get("BOT_TOKEN", ""),
+    session_string=os.environ.get("SESSION_STRING", "")
+)
 
-    async def initialize(self):
-        await self.bot.start()
-        me = await self.bot.get_me()
-        self.bot_id = me.id
-        print(f"🤖 Bot @{me.username} ready (ID: {self.bot_id})")
+# Initialize module
+try:
+    import c_l
+    combined = c_l.CombinedLinkForwarder(bot)
+    print("✅ Module initialized")
+except Exception as e:
+    print(f"❌ Module initialization failed: {e}")
+    raise
 
-        # Initialize modules
-        from forward import ForwardBot
-        import c_l
-        self.forwarder = ForwardBot(self.bot)
-        self.combined = c_l.CombinedLinkForwarder(self.bot)
+@bot.on_message(filters.command("start"))
+async def start(client, message):
+    await message.reply_text(
+        "🤖 Combined Link Forwarder Bot\n\n"
+        "Available commands:\n"
+        "/cl - Combined link clicker and forwarder\n"
+        "/cancel - Cancel current operation\n"
+        "/help - Show help"
+    )
 
-        # Register commands
-        await self.bot.set_bot_commands([
-            BotCommand("start", "Show bot info"),
-            BotCommand("forward", "Message forwarding"),
-            BotCommand("cl", "Combined link processor"),
-            BotCommand("cancel", "Cancel operations")
-        ])
+@bot.on_message(filters.command("cl"))
+async def combined_cmd(client, message):
+    await combined.start_combined_process(message)
 
-    async def run(self):
-        await self.initialize()
+@bot.on_message(filters.command("cancel"))
+async def cancel_cmd(client, message):
+    combined.reset_state()
+    await message.reply_text("⏹ Operation cancelled and state reset")
 
-        @self.bot.on_message(filters.command("start"))
-        async def start(_, message: Message):
-            await message.reply_text(
-                "🤖 <b>Bot is working!</b>\n\n"
-                "<b>Commands:</b>\n"
-                "/forward - Message forwarding\n"
-                "/cl - Combined link processor\n"
-                "/cancel - Cancel operations",
-                parse_mode=ParseMode.HTML
-            )
+@bot.on_message(filters.command("help"))
+async def help_cmd(client, message):
+    await message.reply_text(
+        "🆘 Help Information\n\n"
+        "/cl - Combined link clicker and forwarder:\n"
+        "1. First provide destination chat\n"
+        "2. Then provide links to process\n"
+        "3. Bot will click links and forward responses\n"
+        "/cancel - Cancel current operation\n"
+    )
 
-        @self.bot.on_message(filters.command("forward"))
-        async def forward_cmd(_, message: Message):
-            await self.forwarder.start_forward_setup(message)
+def has_quote_entities(filter, client, message: Message):
+    """Check if message has quote-like formatting"""
+    if not message.entities:
+        return False
+    
+    quote_entity_types = (
+        MessageEntityType.BOLD,
+        MessageEntityType.ITALIC,
+        MessageEntityType.BLOCKQUOTE,
+        MessageEntityType.PRE,
+        MessageEntityType.CODE,
+        MessageEntityType.STRIKETHROUGH,
+        MessageEntityType.UNDERLINE,
+        MessageEntityType.SPOILER
+    )
+    
+    if message.text and message.text.startswith('>'):
+        return True
+    
+    return any(entity.type in quote_entity_types for entity in message.entities)
 
-        @self.bot.on_message(filters.command("cl"))
-        async def combined_cmd(_, message: Message):
-            await self.combined.start_combined_process(message)
+@bot.on_message(
+    filters.text | filters.photo | filters.document |
+    filters.video | filters.audio | filters.voice |
+    filters.reply | filters.create(has_quote_entities)
+)
+async def handle_messages(client, message):
+    if combined.state.get('active'):
+        if not combined.state.get('destination_chat'):
+            await combined.handle_destination_input(message)
+        else:
+            await combined.handle_link_collection(message)
 
-        @self.bot.on_message(filters.command("cancel"))
-        async def cancel_cmd(_, message: Message):
-            self.forwarder.reset_state()
-            self.combined.reset_state()
-            await message.reply_text("🛑 All operations cancelled")
-
-        # Log all messages for debugging
-        @self.bot.on_message()
-        async def log_message(_, message: Message):
-            print(f"Received in chat {message.chat.id}: {message.text or 'media message'}")
-
-        print("🚀 Bot is now responding to all messages in bot chat")
+async def main():
+    print("🚀 Starting bot...")
+    try:
+        print("🔌 Connecting to Telegram...")
+        await bot.start()
+        print("🤖 Bot is now running")
         await asyncio.Event().wait()  # Run forever
-
-    async def shutdown(self):
-        await self.bot.stop()
+    except Exception as e:
+        print(f"💥 Bot crashed: {e}")
+    finally:
+        await bot.stop()
         print("🛑 Bot stopped")
 
 if __name__ == "__main__":
-    bot = Bot()
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
     try:
-        loop.run_until_complete(bot.run())
+        loop.run_until_complete(main())
     except KeyboardInterrupt:
         print("\n🛑 Received shutdown signal")
-    except Exception as e:
-        print(f"💥 Error: {e}")
     finally:
-        loop.run_until_complete(bot.shutdown())
         loop.close()
