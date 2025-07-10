@@ -1,71 +1,80 @@
 import os
-import asyncio
+import tempfile
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import MessageEntityType
 
-# Initialize bot with your exact configuration
-bot = Client(
-    "main_bot",
-    api_id=int(os.environ.get("API_ID", 0)),
-    api_hash=os.environ.get("API_HASH", ""),
-    bot_token=os.environ.get("BOT_TOKEN", ""),
-    session_string=os.environ.get("SESSION_STRING", "")
-)
-
-# Initialize modules exactly as in your original code
+# Check if required module exists
 try:
     import c_l
+    print("✅ c_l module imported successfully")
+except ImportError as e:
+    print(f"❌ Missing module: {e}")
+    raise
+
+# Initialize bot with error handling
+try:
+    bot = Client(
+        "main_bot",
+        api_id=int(os.environ.get("API_ID", 0)),
+        api_hash=os.environ.get("API_HASH", ""),
+        bot_token=os.environ.get("BOT_TOKEN", ""),
+        session_string=os.environ.get("SESSION_STRING", "")
+    )
+    print("✅ Bot client initialized")
+except Exception as e:
+    print(f"❌ Bot initialization failed: {e}")
+    raise
+
+# Initialize module with verification
+try:
     combined = c_l.CombinedLinkForwarder(bot)
-    print("✅ c_l module loaded successfully")
-    
-    # Add forwarder module
-    from forward import ForwardBot
-    forwarder = ForwardBot(bot)
-    print("✅ forward module loaded successfully")
+    print("✅ Module initialized")
 except Exception as e:
     print(f"❌ Module initialization failed: {e}")
     raise
 
 @bot.on_message(filters.command("start"))
-async def start(client, message):
+async def start(client: Client, message: Message):
     await message.reply_text(
         "🤖 Combined Link Forwarder Bot\n\n"
         "Available commands:\n"
-        "/forward - Message forwarding\n"
-        "/cl - Combined link processor\n"
+        "/cl - Combined link clicker and forwarder\n"
+        "/forward - Message forwarding\n"  # Added this line
         "/cancel - Cancel current operation\n"
         "/help - Show help"
     )
 
-@bot.on_message(filters.command("forward"))
-async def forward_cmd(client, message):
-    await forwarder.start_forward_setup(message)
+@bot.on_message(filters.command("forward"))  # Added this handler
+async def forward_cmd(client: Client, message: Message):
+    await message.reply_text(
+        "📤 Forwarding mode\n\n"
+        "Please send the message you want to forward"
+    )
 
 @bot.on_message(filters.command("cl"))
-async def combined_cmd(client, message):
+async def combined_cmd(client: Client, message: Message):
     await combined.start_combined_process(message)
 
 @bot.on_message(filters.command("cancel"))
-async def cancel_cmd(client, message):
+async def cancel_cmd(client: Client, message: Message):
     combined.reset_state()
-    forwarder.reset_state()
-    await message.reply_text("⏹ All operations cancelled")
+    await message.reply_text("⏹ Operation cancelled and state reset")
 
 @bot.on_message(filters.command("help"))
-async def help_cmd(client, message):
+async def help_cmd(client: Client, message: Message):
     await message.reply_text(
         "🆘 Help Information\n\n"
-        "/forward - Forward messages between chats\n"
-        "/cl - Combined link processor\n"
+        "/cl - Combined link clicker and forwarder:\n"
         "1. First provide destination chat\n"
         "2. Then provide links to process\n"
         "3. Bot will click links and forward responses\n"
-        "/cancel - Cancel current operation"
+        "/forward - Forward messages\n"  # Added this line
+        "/cancel - Cancel current operation\n"
     )
 
 def has_quote_entities(filter, client, message: Message):
-    """Your original quote detection function"""
+    """Check if message has quote-like formatting"""
     if not message.entities:
         return False
     
@@ -90,36 +99,42 @@ def has_quote_entities(filter, client, message: Message):
     filters.video | filters.audio | filters.voice |
     filters.reply | filters.create(has_quote_entities)
 )
-async def handle_messages(client, message):
-    if forwarder.state.get('active'):
-        await forwarder.handle_setup_message(message)
-    elif combined.state.get('active'):
+async def handle_messages(client: Client, message: Message):
+    if combined.state.get('active'):
         if not combined.state.get('destination_chat'):
             await combined.handle_destination_input(message)
         else:
             await combined.handle_link_collection(message)
 
-# Add debug message logger
-@bot.on_message()
-async def debug_logger(client, message):
-    print(f"\n📩 Received message:")
-    print(f"Chat ID: {message.chat.id}")
-    print(f"From: {message.from_user.id if message.from_user else 'None'}")
-    print(f"Text: {message.text or 'No text'}\n")
+def create_temp_dirs():
+    """Create required temp directories"""
+    dir_names = [
+        "temp_cl_data"
+    ]
+    for dir_name in dir_names:
+        try:
+            tempfile.mkdtemp(prefix=f"{dir_name}_")
+        except Exception as e:
+            print(f"Error creating temp dir {dir_name}: {e}")
 
-async def run():
-    print("🚀 Starting bot with your original configuration...")
-    await bot.start()
-    print("🤖 Bot is now running")
-    await asyncio.Event().wait()  # Run forever
+# Keep-alive server for Heroku
+from flask import Flask
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running"
+
+import threading
+threading.Thread(target=lambda: app.run(port=int(os.environ.get('PORT', 5000)))).start()
 
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    print("🚀 Starting bot...")
+    create_temp_dirs()
+    
     try:
-        loop.run_until_complete(run())
-    except KeyboardInterrupt:
-        print("\n🛑 Received shutdown signal")
-    finally:
-        loop.run_until_complete(bot.stop())
-        loop.close()
+        print("🔌 Connecting to Telegram...")
+        bot.run()
+        print("🤖 Bot stopped gracefully")
+    except Exception as e:
+        print(f"💥 Bot crashed: {e}")
