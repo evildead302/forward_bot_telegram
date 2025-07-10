@@ -26,8 +26,8 @@ async def run_bot():
         combined = c_l.CombinedLinkForwarder(bot)
         forward_bot = ForwardBot(bot)
 
-        def is_bot_private_chat(message: Message):
-            """Strict filter to only allow bot's private chat"""
+        def is_bot_private_chat(_, __, message: Message):
+            """Correct filter signature with 3 parameters"""
             return (message.chat.type == ChatType.PRIVATE and 
                     message.chat.id == bot_id)
 
@@ -70,10 +70,8 @@ async def run_bot():
 
         @bot.on_message(~filters.create(is_bot_private_chat))
         async def ignore_other_chats(client: Client, message: Message):
-            # Silent ignore for non-private chats
             if message.chat.type == ChatType.PRIVATE and message.chat.id != bot_id:
                 await message.reply("❌ This bot only responds in its private chat")
-            # Complete silent ignore for groups/channels
 
         print("🚀 Bot is now running (only responds to its private chat)")
         await asyncio.Event().wait()
@@ -86,11 +84,9 @@ async def run_bot():
             print("✅ Bot stopped")
 
 if __name__ == "__main__":
-    # Create required directories
     os.makedirs("temp_cl_data", exist_ok=True)
     os.makedirs("forward_temp", exist_ok=True)
     
-    # Run the bot
     loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(run_bot())
