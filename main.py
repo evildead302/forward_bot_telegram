@@ -8,7 +8,7 @@ from pyrogram.enums import ChatType
 class SecureBot:
     def __init__(self):
         self.bot = None
-        self.bot_id = None
+        self.bot_username = None
         self.combined = None
         self.forwarder = None
 
@@ -24,8 +24,8 @@ class SecureBot:
         
         await self.bot.start()
         me = await self.bot.get_me()
-        self.bot_id = me.id
-        print(f"🤖 Bot @{me.username} (ID: {self.bot_id}) initialized")
+        self.bot_username = me.username.lower()
+        print(f"🤖 Bot @{self.bot_username} initialized")
 
         # Initialize modules
         import c_l
@@ -39,11 +39,14 @@ class SecureBot:
 
     def is_bot_chat(self, message: Message):
         """Check if message is in bot's private chat"""
-        return message.chat.type == ChatType.PRIVATE and message.chat.id == self.bot_id
+        # Allow all private chats with the bot
+        return message.chat.type == ChatType.PRIVATE
 
     def register_handlers(self):
         """Register all message handlers"""
-        @self.bot.on_message(filters.command("start") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        bot_chat_filter = filters.create(lambda _, __, m: self.is_bot_chat(m))
+
+        @self.bot.on_message(filters.command("start") & bot_chat_filter)
         async def start(client: Client, message: Message):
             await message.reply_text(
                 "🤖 Combined Link Forwarder Bot\n\n"
@@ -54,21 +57,21 @@ class SecureBot:
                 "/help - Show help"
             )
 
-        @self.bot.on_message(filters.command("forward") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        @self.bot.on_message(filters.command("forward") & bot_chat_filter)
         async def forward_cmd(client: Client, message: Message):
             await self.forwarder.start_forward_setup(message)
 
-        @self.bot.on_message(filters.command("cl") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        @self.bot.on_message(filters.command("cl") & bot_chat_filter)
         async def combined_cmd(client: Client, message: Message):
             await self.combined.start_combined_process(message)
 
-        @self.bot.on_message(filters.command("cancel") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        @self.bot.on_message(filters.command("cancel") & bot_chat_filter)
         async def cancel_cmd(client: Client, message: Message):
             self.combined.reset_state()
             self.forwarder.reset_state()
             await message.reply_text("⏹ Operation cancelled")
 
-        @self.bot.on_message(filters.command("help") & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        @self.bot.on_message(filters.command("help") & bot_chat_filter)
         async def help_cmd(client: Client, message: Message):
             await message.reply_text(
                 "🆘 Help Information\n\n"
@@ -80,16 +83,17 @@ class SecureBot:
         @self.bot.on_message(
             (filters.text | filters.photo | filters.document |
              filters.video | filters.audio | filters.voice |
-             filters.reply) & filters.create(lambda _, __, m: self.is_bot_chat(m)))
+             filters.reply) & bot_chat_filter
+        )
         async def handle_messages(client: Client, message: Message):
             if self.combined.state.get('active'):
                 await self.combined.handle_message_flow(message)
             elif self.forwarder.state.get('active'):
                 await self.forwarder.handle_setup_message(message)
 
-        @self.bot.on_message(~filters.create(lambda _, __, m: self.is_bot_chat(m)))
+        @self.bot.on_message(~bot_chat_filter)
         async def ignore_other_messages(_, message: Message):
-            print(f"🚫 Ignored message from {message.from_user.id if message.from_user else 'unknown'} in chat {message.chat.id}")
+            print(f"🚫 Ignored message from {message.from_user.id if message.from_user else 'unknown'} in chat {message.chat.id} (type: {message.chat.type})")
 
     async def run(self):
         """Main bot running loop"""
