@@ -4,54 +4,47 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, BotCommand
 from pyrogram.enums import ParseMode
 
-class WorkingBot:
+class Bot:
     def __init__(self):
-        # Initialize bot with environment variables
         self.bot = Client(
-            "main_bot",
+            "my_bot",
             api_id=int(os.environ["API_ID"]),
             api_hash=os.environ["API_HASH"],
             bot_token=os.environ["BOT_TOKEN"],
             in_memory=True
         )
-        
-        # Initialize modules
+        self.bot_id = None
         self.forwarder = None
         self.combined = None
-        self.bot_id = None
 
-    async def initialize_modules(self):
-        """Initialize all required modules"""
-        from forward import ForwardBot  # Your forwarding module
-        import c_l  # Your combined links module
-        
-        self.forwarder = ForwardBot(self.bot)
-        self.combined = c_l.CombinedLinkForwarder(self.bot)
-        print("✅ Modules initialized")
-
-    async def run(self):
+    async def initialize(self):
         await self.bot.start()
         me = await self.bot.get_me()
         self.bot_id = me.id
         print(f"🤖 Bot @{me.username} ready (ID: {self.bot_id})")
 
         # Initialize modules
-        await self.initialize_modules()
+        from forward import ForwardBot
+        import c_l
+        self.forwarder = ForwardBot(self.bot)
+        self.combined = c_l.CombinedLinkForwarder(self.bot)
 
-        # Set bot commands
+        # Register commands
         await self.bot.set_bot_commands([
             BotCommand("start", "Show bot info"),
             BotCommand("forward", "Message forwarding"),
             BotCommand("cl", "Combined link processor"),
-            BotCommand("cancel", "Cancel current operation")
+            BotCommand("cancel", "Cancel operations")
         ])
 
-        # Command handlers
+    async def run(self):
+        await self.initialize()
+
         @self.bot.on_message(filters.command("start"))
         async def start(_, message: Message):
             await message.reply_text(
-                "🔧 <b>Bot is fully operational!</b>\n\n"
-                "<b>Available commands:</b>\n"
+                "🤖 <b>Bot is working!</b>\n\n"
+                "<b>Commands:</b>\n"
                 "/forward - Message forwarding\n"
                 "/cl - Combined link processor\n"
                 "/cancel - Cancel operations",
@@ -72,20 +65,20 @@ class WorkingBot:
             self.combined.reset_state()
             await message.reply_text("🛑 All operations cancelled")
 
-        # Debug handler
+        # Log all messages for debugging
         @self.bot.on_message()
-        async def debug(_, message: Message):
-            print(f"Received message from {message.from_user.id}: {message.text}")
+        async def log_message(_, message: Message):
+            print(f"Received in chat {message.chat.id}: {message.text or 'media message'}")
 
-        print("⚡ Bot is now fully operational")
+        print("🚀 Bot is now responding to all messages in bot chat")
         await asyncio.Event().wait()  # Run forever
 
     async def shutdown(self):
         await self.bot.stop()
-        print("🛑 Bot stopped gracefully")
+        print("🛑 Bot stopped")
 
 if __name__ == "__main__":
-    bot = WorkingBot()
+    bot = Bot()
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
