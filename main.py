@@ -8,53 +8,43 @@ from pyrogram.enums import ChatType
 class SecureBot:
     def __init__(self):
         self.bot = None
-        self.user = None  # User client
-        self.bot_username = None
+        self.bot_chat_id = None  # Will store bot's own chat ID
         self.combined = None
         self.forwarder = None
 
     async def initialize(self):
-        """Initialize both bot and user sessions"""
-        # Initialize bot client
+        """Initialize the bot and all components"""
         self.bot = Client(
-            "bot_account",
-            api_id=int(os.environ["API_ID"]),
-            api_hash=os.environ["API_HASH"],
-            bot_token=os.environ["BOT_TOKEN"],
+            "main_bot",
+            api_id=int(os.environ.get("API_ID", 0)),
+            api_hash=os.environ.get("API_HASH", ""),
+            bot_token=os.environ.get("BOT_TOKEN", ""),
             in_memory=True
         )
         
-        # Initialize user client if session string exists
-        if os.environ.get("SESSION_STRING"):
-            self.user = Client(
-                "user_account",
-                api_id=int(os.environ["API_ID"]),
-                api_hash=os.environ["API_HASH"],
-                session_string=os.environ["SESSION_STRING"],
-                in_memory=True
-            )
-            await self.user.start()
-            print("👤 User session initialized")
-        
         await self.bot.start()
         me = await self.bot.get_me()
-        self.bot_username = me.username.lower()
-        print(f"🤖 Bot @{self.bot_username} initialized")
+        # Get the bot's own chat ID by creating a dummy message
+        async with self.bot:
+            sent = await self.bot.send_message(me.id, "Initializing...")
+            self.bot_chat_id = sent.chat.id
+            await sent.delete()
+        
+        print(f"🤖 Bot @{me.username} (Chat ID: {self.bot_chat_id}) initialized")
 
-        # Initialize modules with user client if available
+        # Initialize modules
         import c_l
         from forward import ForwardBot
-        client_to_use = self.user if self.user else self.bot
-        self.combined = c_l.CombinedLinkForwarder(client_to_use)
-        self.forwarder = ForwardBot(client_to_use)
+        self.combined = c_l.CombinedLinkForwarder(self.bot)
+        self.forwarder = ForwardBot(self.bot)
         print("✅ Modules loaded")
 
         # Register handlers
         self.register_handlers()
 
     def is_bot_chat(self, message: Message):
-        """Check if message is in bot's private chat"""
-        return message.chat.type == ChatType.PRIVATE
+        """Strict check if message is in bot's own chat"""
+        return message.chat.id == self.bot_chat_id
 
     def register_handlers(self):
         """Register all message handlers"""
@@ -125,16 +115,9 @@ class SecureBot:
         if self.bot and self.bot.is_initialized:
             try:
                 await self.bot.stop()
+                print("✅ Bot stopped gracefully")
             except Exception as e:
-                print(f"⚠️ Error stopping bot: {e}")
-        
-        if self.user and self.user.is_initialized:
-            try:
-                await self.user.stop()
-            except Exception as e:
-                print(f"⚠️ Error stopping user client: {e}")
-        
-        print("✅ All clients stopped")
+                print(f"⚠️ Error during shutdown: {e}")
 
 def create_temp_dirs():
     """Create required temporary directories"""
