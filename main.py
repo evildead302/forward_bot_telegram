@@ -45,7 +45,7 @@ class SecureBot:
             
             @self.bot.on_message(filters.create(
                 lambda _, __, m: self.is_bots_own_chat(m)
-            )
+            ))
             async def handle_bot_chat(client: Client, message: Message):
                 print(f"📩 New message in bot's chat")
                 if message.text and message.text.startswith('/'):
