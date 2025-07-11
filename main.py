@@ -2,89 +2,117 @@ import os
 import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message
+from pyrogram.enums import ChatType
 
-# ===== CONFIG =====
-BOT_USERNAME = "@Saverestrictcontant2_bot"  # Change this to your bot's username
-# ==================
-
-class SimpleBot:
+class SecureBot:
     def __init__(self):
         self.bot = None
-        self.user = None
-        self.bot_username = BOT_USERNAME.lower().strip("@")
+        self.bot_id = None
+        # Editable bot username (change this to your bot's username)
+        self.bot_username = "Saverestrictcontant2_bot"  # EDIT THIS LINE WITH YOUR BOT USERNAME
+        self.combined = None
         self.forwarder = None
 
     async def initialize(self):
-        """Initialize both clients in one go"""
+        """Initialize with proper session handling"""
         self.bot = Client(
-            "my_bot",
-            api_id=int(os.environ["API_ID"]),
-            api_hash=os.environ["API_HASH"],
-            bot_token=os.environ["BOT_TOKEN"]
-        )
-        
-        self.user = Client(
-            "my_user",
-            api_id=int(os.environ["API_ID"]),
-            api_hash=os.environ["API_HASH"],
-            session_string=os.environ["SESSION_STRING"]
+            "main_bot",
+            api_id=int(os.environ.get("API_ID", 0)),
+            api_hash=os.environ.get("API_HASH", ""),
+            bot_token=os.environ.get("BOT_TOKEN", ""),
+            session_string=os.environ.get("SESSION_STRING", "")
         )
 
         await self.bot.start()
-        await self.user.start()
-        
-        # Verify bot username
         me = await self.bot.get_me()
-        print(f"🤖 Bot @{me.username} ready!")
-        print(f"👤 User {self.user.storage.first_name} ready!")
+        self.bot_id = me.id
+        # Use the manually set username instead of getting from Telegram
+        print(f"✅ Logged in as @{self.bot_username} (ID: {self.bot_id})")
+
+        # Initialize only required modules
+        import c_l
+        from forward import ForwardBot
+        self.combined = c_l.CombinedLinkForwarder(self.bot)
+        self.forwarder = ForwardBot(self.bot)
+
+    def is_bot_username_message(self, message: Message):
+        """Check if message is directed to the bot username"""
+        if message.text and f"@{self.bot_username}" in message.text:
+            return True
+        if message.reply_to_message and message.reply_to_message.from_user:
+            return message.reply_to_message.from_user.username == self.bot_username
+        return False
 
     async def run(self):
-        await self.initialize()
-        
-        # Initialize forwarder (create forward.py with your forwarding logic)
-        from forward import Forwarder
-        self.forwarder = Forwarder(self.user)
+        try:
+            await self.initialize()
+            print(f"🚀 Bot @{self.bot_username} is now running")
 
-        @self.bot.on_message(filters.private)
-        async def handle_messages(_, message: Message):
-            # Check if message is for our bot
-            if message.chat.username.lower() != self.bot_username:
-                print(f"🚫 Ignored message from @{message.chat.username}")
-                return
-                
-            if message.text.startswith('/start'):
-                await message.reply(f"Hello! I'm {BOT_USERNAME}\nUse /forward to start")
-            elif message.text.startswith('/forward'):
-                await self.forwarder.start(message)
-            elif message.text.startswith('/cancel'):
-                self.forwarder.cancel()
-                await message.reply("Operation cancelled")
-            else:
-                if self.forwarder.is_active:
-                    await self.forwarder.handle(message)
+            @self.bot.on_message(filters.create(
+                lambda _, __, m: self.is_bot_username_message(m)
+            ))
+            async def handle_bot_username(client: Client, message: Message):
+                print(f"📩 Received message for @{self.bot_username} in chat: {message.chat.id}")
+                if message.text and message.text.startswith('/'):
+                    await self.process_commands(message)
                 else:
-                    await message.reply("Send /forward to begin")
+                    await self.process_messages(message)
 
-        print(f"✅ {BOT_USERNAME} is listening...")
-        await asyncio.Event().wait()  # Run forever
+            @self.bot.on_message(~filters.create(
+                lambda _, __, m: self.is_bot_username_message(m)
+            ))
+            async def ignore_others(client: Client, message: Message):
+                # Silent ignore of other messages
+                pass
 
-    async def shutdown(self):
-        await self.bot.stop()
-        await self.user.stop()
-        print("🛑 Bot stopped")
+            await asyncio.Event().wait()
+
+        except Exception as e:
+            print(f"💥 Error: {e}")
+        finally:
+            if self.bot and await self.bot.is_initialized:
+                await self.bot.stop()
+                print("✅ Bot stopped")
+
+    async def process_commands(self, message: Message):
+        """Handle commands in bot's private chat"""
+        if message.text.startswith('/start'):
+            await message.reply_text(
+                "🤖 Bot Menu\n\n"
+                "/forward - Forward messages\n"
+                "/cl - Combined operations\n"
+                "/cancel - Cancel operation"
+            )
+        elif message.text.startswith('/forward'):
+            await self.forwarder.start_forward_setup(message)
+        elif message.text.startswith('/cl'):
+            await self.combined.start_combined_process(message)
+        elif message.text.startswith('/cancel'):
+            self.forwarder.reset_state()
+            self.combined.reset_state()
+            await message.reply_text("⏹ Operations cancelled")
+
+    async def process_messages(self, message: Message):
+        """Handle non-command messages during operations"""
+        if self.forwarder.state.get('active'):
+            await self.forwarder.handle_setup_message(message)
+        elif self.combined.state.get('active'):
+            if not self.combined.state.get('destination_chat'):
+                await self.combined.handle_destination_input(message)
+            else:
+                await self.combined.handle_link_collection(message)
 
 if __name__ == "__main__":
-    # Check required env variables
-    required = ["API_ID", "API_HASH", "BOT_TOKEN", "SESSION_STRING"]
-    if not all(os.environ.get(x) for x in required):
-        print("❌ Missing environment variables")
-        exit(1)
-
-    bot = SimpleBot()
+    # Create required directories
+    os.makedirs("temp_cl_data", exist_ok=True)
+    os.makedirs("forward_temp", exist_ok=True)
+    
+    # Run the bot
+    bot = SecureBot()
+    loop = asyncio.new_event_loop()
     try:
-        asyncio.run(bot.run())
+        loop.run_until_complete(bot.run())
     except KeyboardInterrupt:
-        asyncio.run(bot.shutdown())
-    except Exception as e:
-        print(f"💥 Error: {e}")
-        asyncio.run(bot.shutdown())
+        print("\n🛑 Bot stopped by user")
+    finally:
+        loop.close()
