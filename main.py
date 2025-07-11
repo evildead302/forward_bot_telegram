@@ -71,7 +71,11 @@ class SecureBot:
     async def process_commands(self, message: Message):
         """Handle commands in bot's chat"""
         if message.text.startswith('/start'):
-            await message.reply("🤖 Bot is active in this chat")
+            await message.reply("🤖 Forwarder Bot\n\n"
+        "Available commands:\n"
+        "/cl - Combined link clicker and forwarder\n"
+          "/forward - forwarder\n"                      
+        "/cancel - Cancel current operation\n")
         elif message.text.startswith('/forward'):
             await self.forwarder.start_forward_setup(message)
         elif message.text.startswith('/cl'):
