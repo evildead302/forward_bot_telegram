@@ -22,7 +22,7 @@ class ForwardBot:
         self.reset_state()
         
         # Configuration
-        self.MAX_PARALLEL = 2
+        self.MAX_PARALLEL = 1
         self.SCAN_WORKERS = 5
         self.SCAN_BATCH_SIZE = 5000
         self.FORWARD_DELAY = 60
